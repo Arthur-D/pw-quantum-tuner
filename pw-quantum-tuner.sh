@@ -1,14 +1,11 @@
 #!/usr/bin/env bash
 
 # === CONFIGURATION ===
-base_threshold=3              # Default ERR/s threshold to trigger increase
-min_threshold=1               # Adaptive threshold lower bound
-adaptive_decay=1              # How fast to restore threshold after quiet
-check_interval=10             # Check every 10 seconds
-
-quantum_change_cooldown=30    # Minimum seconds between increases
-decrease_cooldown=120         # Minimum seconds between decreases
-low_err_streak_target=6       # Intervals below threshold to decrease quantum
+base_threshold=3                # Starting threshold for ERR/s
+check_interval=10               # Check every 10 seconds
+quantum_change_cooldown=15      # Minimum seconds between increases
+decrease_attempt_delay=120      # How long to wait before trying a decrease
+low_err_streak_target=9         # Number of intervals before attempting to lower
 
 # === Function to read numeric metadata values ===
 read_metadata_value() {
@@ -31,38 +28,35 @@ get_err_value() {
     END { print max + 0 }'
 }
 
-# === Read min/max from metadata, with sane fallbacks ===
+# === Read min/max from metadata ===
 min_quantum=$(read_metadata_value clock.min-quantum)
 max_quantum=$(read_metadata_value clock.max-quantum)
 [[ -z "$min_quantum" ]] && min_quantum=128
-[[ -z "$max_quantum" ]] && max_quantum=4096
+[[ -z "$max_quantum" ]] && max_quantum=8192
 
 # === Determine initial quantum ===
 initial_quantum=$(read_metadata_value clock.force-quantum)
 if [[ -z "$initial_quantum" || "$initial_quantum" -le 0 ]]; then
-    echo "$(date +'%F %T') Invalid or missing clock.force-quantum — using min_quantum ($min_quantum)"
     initial_quantum="$min_quantum"
-    /usr/bin/pw-metadata -n settings 0 clock.force-quantum "$initial_quantum"
+    echo "$(date +'%F %T') No valid clock.force-quantum found. Setting to $initial_quantum"
+    /usr/bin/pw-metadata -n settings 0 clock.force-quantum "$initial_quantum" > /dev/null
 else
     echo "$(date +'%F %T') Detected existing clock.force-quantum: $initial_quantum"
 fi
 
 quantum=$initial_quantum
-
-# === Setup signal handler ===
-trap 'echo "Exiting... restoring initial quantum: $initial_quantum"; /usr/bin/pw-metadata -n settings 0 clock.force-quantum "$initial_quantum"; exit 0' SIGINT SIGTERM
-
-# === State ===
+stable_quantum=$quantum
 low_err_streak=0
 last_quantum_change=0
-adaptive_threshold=$base_threshold
+last_decrease_attempt=0
+
+trap 'echo "Exiting... restoring initial quantum: $initial_quantum"; /usr/bin/pw-metadata -n settings 0 clock.force-quantum "$initial_quantum"; exit 0' SIGINT SIGTERM
+
 prev_err=$(get_err_value)
 
-# === Main Loop ===
 while true; do
     sleep "$check_interval"
     now=$(date +%s)
-
     curr_err=$(get_err_value)
 
     if ! [[ "$curr_err" =~ ^[0-9]+$ ]] || ! [[ "$prev_err" =~ ^[0-9]+$ ]]; then
@@ -73,13 +67,11 @@ while true; do
     err_diff=$((curr_err - prev_err))
     prev_err=$curr_err
 
-#     echo "$(date +'%F %T') DEBUG: ERR/s=$err_diff | Quantum=$quantum | Threshold=$adaptive_threshold"
+    echo "$(date +'%F %T') DEBUG: ERR/s=$err_diff | Quantum=$quantum | Stable=$stable_quantum"
 
-    # === Decision: Increase quantum ===
-    if (( err_diff > adaptive_threshold )); then
+    # === Increase quantum aggressively if ERRs detected ===
+    if (( err_diff > base_threshold )); then
         low_err_streak=0
-        (( adaptive_threshold-- ))
-        (( adaptive_threshold < min_threshold )) && adaptive_threshold=$min_threshold
 
         if (( now - last_quantum_change >= quantum_change_cooldown )) && (( quantum * 2 <= max_quantum )); then
             quantum=$((quantum * 2))
@@ -88,18 +80,25 @@ while true; do
             last_quantum_change=$now
         fi
 
-    # === Decision: Decrease quantum ===
     else
         ((low_err_streak++))
-        (( adaptive_threshold += adaptive_decay ))
-        (( adaptive_threshold > base_threshold )) && adaptive_threshold=$base_threshold
 
-        if (( low_err_streak >= low_err_streak_target )) && \
-           (( now - last_quantum_change >= decrease_cooldown )) && \
+        # Record stable quantum if long enough streak of low errors
+        if (( low_err_streak >= 3 )); then
+            if (( quantum < stable_quantum || stable_quantum == 0 )); then
+                stable_quantum=$quantum
+                echo "$(date +'%F %T') Stable quantum determined: $stable_quantum"
+            fi
+        fi
+
+        # Only try to decrease after long calm
+        if (( low_err_streak >= low_err_streak_target )) &&
+           (( now - last_quantum_change >= decrease_attempt_delay )) &&
+           (( quantum > stable_quantum )) &&
            (( quantum / 2 >= min_quantum )); then
 
             quantum=$((quantum / 2))
-            echo "$(date +'%F %T') ↓ ERR/s: $err_diff | Decreasing quantum to $quantum"
+            echo "$(date +'%F %T') ↓ ERR/s: $err_diff | Attempting to decrease quantum to $quantum"
             /usr/bin/pw-metadata -n settings 0 clock.force-quantum "$quantum" > /dev/null
             last_quantum_change=$now
             low_err_streak=0

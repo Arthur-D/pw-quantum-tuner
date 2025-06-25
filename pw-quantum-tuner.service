@@ -1,0 +1,13 @@
+[Unit]
+Description=PipeWire Quantum Auto-Tuner (User Service)
+After=pipewire.service pipewire.socket
+Requires=pipewire.service
+
+[Service]
+ExecStart=/full/path/to/script/pw-quantum-tuner/pw-quantum-tuner.sh
+Restart=on-failure
+RestartSec=3
+# Environment=PATH=/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=default.target

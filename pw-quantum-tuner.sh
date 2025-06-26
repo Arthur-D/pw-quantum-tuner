@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 
 # === CONFIGURATION ===
-base_threshold=3              # Base ERR/s threshold
-low_err_streak_target=60      # Longer wait before decreasing quantum
+base_threshold=2              # Base ERR/s threshold
+low_err_streak_target=10      # Longer wait before decreasing quantum
 quantum_change_cooldown=30    # Seconds between allowed quantum changes
 check_interval=10             # How often to check (in seconds)
 

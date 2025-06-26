@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 
 # === CONFIGURATION ===
-base_threshold=2              # Base ERR/s threshold
-low_err_streak_target=10      # Longer wait before decreasing quantum
+base_threshold=2              # Base ERR/s threshold (adjusted as requested)
+low_err_streak_target=3       # Number of checks with low ERRs before decreasing quantum
 quantum_change_cooldown=30    # Seconds between allowed quantum changes
 check_interval=10             # How often to check (in seconds)
 
@@ -18,20 +18,13 @@ max_quantum=$(read_metadata_value clock.max-quantum)
 [[ -z "$min_quantum" ]] && min_quantum=128
 [[ -z "$max_quantum" ]] && max_quantum=8192
 
-# === Determine current quantum (only used if valid) ===
-initial_quantum=$(read_metadata_value clock.force-quantum)
-
-if [[ -z "$initial_quantum" || "$initial_quantum" -le 0 ]]; then
-    echo "$(date +'%F %T') No valid clock.force-quantum found. Waiting to set quantum until needed."
-    quantum=0
-else
-    echo "$(date +'%F %T') Detected existing clock.force-quantum: $initial_quantum"
-    quantum=$initial_quantum
-fi
-
 # === Setup state ===
 low_err_streak=0
 last_quantum_change=0
+
+# Initialize quantum only if clock.force-quantum is set
+quantum=$(read_metadata_value clock.force-quantum)
+
 prev_err=$(/usr/bin/pw-top -bn2 | awk 'NF >= 9 && $9 ~ /^[0-9]+$/ { if ($9 > max) max = $9 } END { print max + 0 }')
 
 # === Main Loop ===
@@ -49,18 +42,13 @@ while true; do
     err_diff=$((curr_err - prev_err))
     prev_err=$curr_err
 
-    # Skip changes if quantum is unset and no ERRs
-    if (( quantum == 0 )) && (( err_diff == 0 )); then
-        continue
-    fi
-
-    # If no valid quantum yet, set to min_quantum on first ERR
-    if (( quantum == 0 )); then
-        quantum=$min_quantum
-        echo "$(date +'%F %T') ↑ First ERRs detected | Setting initial quantum to $quantum"
-        /usr/bin/pw-metadata -n settings 0 clock.force-quantum "$quantum" > /dev/null
-        last_quantum_change=$now
-        continue
+    # Only read the current clock.force-quantum when we need to adjust!
+    if [[ -z "$quantum" || "$quantum" -le 0 ]]; then
+        quantum=$(read_metadata_value clock.force-quantum)
+        # If still unset or invalid, do not attempt adjustment, but keep monitoring
+        if [[ -z "$quantum" || "$quantum" -le 0 ]]; then
+            continue
+        fi
     fi
 
     # Adaptive threshold grows with quantum
@@ -72,17 +60,17 @@ while true; do
         if (( now - last_quantum_change >= quantum_change_cooldown )) && (( quantum * 2 <= max_quantum )); then
             quantum=$((quantum * 2))
             echo "$(date +'%F %T') ↑ ERR/s: $err_diff | Increasing quantum to $quantum"
-            /usr/bin/pw-metadata -n settings 0 clock.force-quantum "$quantum" > /dev/null
+            /usr/bin/pw-metadata -n settings 0 clock.force-quantum "$quantum" >/dev/null 2>&1
             last_quantum_change=$now
         fi
-
+    echo "low_err_streak=$low_err_streak now=$now last_quantum_change=$last_quantum_change quantum=$quantum min_quantum=$min_quantum"
     # === Decrease quantum ===
     else
         ((low_err_streak++))
         if (( low_err_streak >= low_err_streak_target )) && (( now - last_quantum_change >= quantum_change_cooldown )) && (( quantum / 2 >= min_quantum )); then
             quantum=$((quantum / 2))
             echo "$(date +'%F %T') ↓ ERR/s: $err_diff | Decreasing quantum to $quantum"
-            /usr/bin/pw-metadata -n settings 0 clock.force-quantum "$quantum" > /dev/null
+            /usr/bin/pw-metadata -n settings 0 clock.force-quantum "$quantum" >/dev/null 2>&1
             last_quantum_change=$now
             low_err_streak=0
         fi

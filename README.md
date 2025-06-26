@@ -67,7 +67,7 @@ Make sure that the script path in the service file matches the location of your 
 
 You can edit the script to adjust thresholds and intervals:
 
-- `base_threshold`: Base error threshold before increasing quantum (default: 3)
-- `low_err_streak_target`: Target of low error checks before decreasing quantum (default: 60)
+- `base_threshold`: Base error threshold before increasing quantum (default: 2)
+- `low_err_streak_target`: Target of low error checks before decreasing quantum (default: 10)
 - `quantum_change_cooldown`: Minimum seconds between quantum changes (default: 30)
 - `check_interval`: How often to check for errors (default: 10)

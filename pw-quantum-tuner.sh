@@ -70,7 +70,7 @@ last_decrease_or_increase_time=0
 last_err_increase_time=0
 
 if (( log_level >= 1 )); then
-    echo "Starting PipeWire quantum tuner at log level $log_level. Quantum=$quant, min_quantum=$min_quantum, max_quantum=$max_quantum."
+    echo "Starting PipeWire quantum tuner at log level $log_level (quant=$quantum, min=$min_quantum, max=$max_quantum)"
 fi
 
 interval_lines=()
@@ -197,7 +197,7 @@ pw-top -b | while read -r line; do
         next_quantum=$((quantum * 2))
         next_quantum=$(clamp "$next_quantum" "$min_quantum" "$max_quantum")
         if (( next_quantum > quantum )); then
-            log 1 "↑ Increasing quantum from $quantum to $next_quantum due to ERRs increasing"
+            log 1 "↑ Increasing quantum from $quantum to $next_quantum due to ERRs increasing (next decrease in $base_backoff min)"
             if (( log_level >= 2 )); then
                 for i in "${!increase_names[@]}"; do
                     key="${increase_names[$i]}"
@@ -213,7 +213,7 @@ pw-top -b | while read -r line; do
             /usr/bin/pw-metadata -n settings 0 clock.force-quantum "$next_quantum" >/dev/null 2>&1
             last_set_quantum=$next_quantum
             quantum=$next_quantum
-            log 1 "Will decrease quantum from $next_quantum to $((next_quantum/2)) in $base_backoff min"
+#             log 1 "Will decrease quantum from $next_quantum to $((next_quantum/2)) in $base_backoff min"
             quantum_just_changed=1
         fi
         last_decrease_or_increase_time=$now
@@ -228,7 +228,7 @@ pw-top -b | while read -r line; do
             next_quantum=$(clamp "$next_quantum" "$min_quantum" "$max_quantum")
             next_backoff=$(( base_backoff / 2 ))
             (( next_backoff < 1 )) && next_backoff=1
-            log 1 "↓ Decreasing quantum from $quantum to $next_quantum (no ERRs in $base_backoff min, decrease retry in $next_backoff min)"
+            log 1 "↓ Decreasing quantum from $quantum to $next_quantum (next decrease in $next_backoff min)"
             /usr/bin/pw-metadata -n settings 0 clock.force-quantum "$next_quantum" >/dev/null 2>&1
             last_set_quantum=$next_quantum
             quantum=$next_quantum
@@ -242,7 +242,7 @@ pw-top -b | while read -r line; do
                 seconds_left=$(( base_backoff * 60 - seconds_since_increase ))
                 mins_left=$(( seconds_left / 60 ))
                 secs_rem=$(( seconds_left % 60 ))
-                log 2 "No decrease: $mins_left minute(s) $secs_rem second(s) of backoff left before decrease is possible (quantum=$quantum, min=$min_quantum, max=$max_quantum)"
+                log 2 "$mins_left minute(s) $secs_rem second(s) before next decrease (quantum=$quantum, min=$min_quantum, max=$max_quantum)"
             fi
         fi
     else
@@ -252,7 +252,7 @@ pw-top -b | while read -r line; do
             (( seconds_left < 0 )) && seconds_left=0
             mins_left=$(( seconds_left / 60 ))
             secs_rem=$(( seconds_left % 60 ))
-            log 2 "Minimum quantum achieved: $mins_left minute(s) $secs_rem second(s) of backoff left (quantum=$quantum, min=$min_quantum, max=$max_quantum)"
+            log 2 "Minimum quantum achieved: $mins_left minute(s) $secs_rem second(s) of backoff left (quant=$quantum, min=$min_quantum, max=$max_quantum)"
         fi
     fi
 

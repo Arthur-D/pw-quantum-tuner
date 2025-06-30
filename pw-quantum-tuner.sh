@@ -193,11 +193,12 @@ pw-top -b | while read -r line; do
 
     quantum_changed=0
 
+
     if (( increased_this_interval )); then
         next_quantum=$((quantum * 2))
         next_quantum=$(clamp "$next_quantum" "$min_quantum" "$max_quantum")
         if (( next_quantum > quantum )); then
-            log 1 "↑ Increasing quantum from $quantum to $next_quantum due to ERRs increasing (next decrease in $base_backoff min)"
+            log 1 "↑ Increasing quantum from $quantum to $next_quantum due to ERRs increasing"
             if (( log_level >= 2 )); then
                 for i in "${!increase_names[@]}"; do
                     key="${increase_names[$i]}"
@@ -213,7 +214,9 @@ pw-top -b | while read -r line; do
             /usr/bin/pw-metadata -n settings 0 clock.force-quantum "$next_quantum" >/dev/null 2>&1
             last_set_quantum=$next_quantum
             quantum=$next_quantum
-#             log 1 "Will decrease quantum from $next_quantum to $((next_quantum/2)) in $base_backoff min"
+            if (( log_level >= 3 )); then
+                log 3 "Will decrease quantum from $next_quantum to $((next_quantum/2)) in $base_backoff min"
+            fi
             quantum_just_changed=1
         fi
         last_decrease_or_increase_time=$now
@@ -242,7 +245,7 @@ pw-top -b | while read -r line; do
                 seconds_left=$(( base_backoff * 60 - seconds_since_increase ))
                 mins_left=$(( seconds_left / 60 ))
                 secs_rem=$(( seconds_left % 60 ))
-                log 2 "$mins_left minute(s) $secs_rem second(s) before next decrease (quant=$quantum, min=$min_quantum, max=$max_quantum)"
+#                 log 2 "$mins_left minute(s) $secs_rem second(s) before next decrease (quant=$quantum, min=$min_quantum, max=$max_quantum)"
             fi
         fi
     else
@@ -252,7 +255,7 @@ pw-top -b | while read -r line; do
             (( seconds_left < 0 )) && seconds_left=0
             mins_left=$(( seconds_left / 60 ))
             secs_rem=$(( seconds_left % 60 ))
-            log 2 "Minimum quantum achieved: $mins_left minute(s) $secs_rem second(s) of backoff left (quant=$quantum, min=$min_quantum, max=$max_quantum)"
+#             log 2 "Minimum quantum achieved: $mins_left minute(s) $secs_rem second(s) of backoff left (quant=$quantum, min=$min_quantum, max=$max_quantum)"
         fi
     fi
 

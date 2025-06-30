@@ -242,7 +242,7 @@ pw-top -b | while read -r line; do
                 seconds_left=$(( base_backoff * 60 - seconds_since_increase ))
                 mins_left=$(( seconds_left / 60 ))
                 secs_rem=$(( seconds_left % 60 ))
-                log 2 "$mins_left minute(s) $secs_rem second(s) before next decrease (quantum=$quantum, min=$min_quantum, max=$max_quantum)"
+                log 2 "$mins_left minute(s) $secs_rem second(s) before next decrease (quant=$quantum, min=$min_quantum, max=$max_quantum)"
             fi
         fi
     else

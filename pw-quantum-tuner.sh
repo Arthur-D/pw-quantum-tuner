@@ -64,7 +64,10 @@ else
 fi
 last_set_quantum=$quantum
 
-declare -A prev_errs curr_errs client_pretty_names client_quants client_seen
+declare -A prev_errs curr_errs client_pretty_names client_quants client_seen client_roles
+declare -A quantum_backoff
+default_backoff=1
+
 last_action_time=0
 last_decrease_or_increase_time=0
 last_err_increase_time=0
@@ -148,12 +151,22 @@ pw-top -b | while read -r line; do
         err="${parsed[2]}"
         quant="${parsed[3]}"
         role="${parsed[4]}"
+        # Only process running clients
+        if [[ "$role" != "R" ]]; then
+            continue
+        fi
         curr_errs["$key"]=$err
         client_pretty_names["$key"]="$name"
         client_quants["$key"]=$quant
         client_roles["$key"]=$role
     done
     interval_lines=()
+
+    # Initialize backoff for current quantum if not set
+    if [[ -z "${quantum_backoff[$quantum]+set}" ]]; then
+        quantum_backoff[$quantum]=$default_backoff
+    fi
+    current_backoff=${quantum_backoff[$quantum]}
 
     quantum=$(clamp "$quantum" "$min_quantum" "$max_quantum")
     interval_count=$((interval_count + 1))
@@ -171,6 +184,10 @@ pw-top -b | while read -r line; do
     increase_amounts=()
     increased_this_interval=0
     for key in "${!curr_errs[@]}"; do
+        # Only track running clients
+        if [[ "${client_roles[$key]}" != "R" ]]; then
+            continue
+        fi
         curr_val=${curr_errs[$key]:-0}
         prev_val=${prev_errs[$key]:-unset}
         if [[ -z "${client_seen[$key]+set}" ]]; then
@@ -193,12 +210,25 @@ pw-top -b | while read -r line; do
 
     quantum_changed=0
 
-
     if (( increased_this_interval )); then
         next_quantum=$((quantum * 2))
         next_quantum=$(clamp "$next_quantum" "$min_quantum" "$max_quantum")
+        # Initialize backoff for next quantum if not set
+        if [[ -z "${quantum_backoff[$next_quantum]+set}" ]]; then
+            quantum_backoff[$next_quantum]=$current_backoff
+        fi
         if (( next_quantum > quantum )); then
-            log 1 "↑ Increasing quantum from $quantum to $next_quantum due to ERRs increasing"
+            # Calculate total new ERRs for this interval
+            total_new_errs=0
+            for delta in "${increase_amounts[@]}"; do
+                total_new_errs=$((total_new_errs + delta))
+            done
+
+            # Double the backoff for next quantum when increasing
+            quantum_backoff[$next_quantum]=$(( quantum_backoff[$next_quantum] * 2 ))
+
+            msg="↑ Increasing quantum from $quantum to $next_quantum due to $total_new_errs new ERRs (next decrease in ${quantum_backoff[$next_quantum]} min)"
+            log 1 "$msg"
             if (( log_level >= 2 )); then
                 for i in "${!increase_names[@]}"; do
                     key="${increase_names[$i]}"
@@ -207,58 +237,70 @@ pw-top -b | while read -r line; do
                     log 2 "  ${client_pretty_names[$key]} ($delta new ERRs, total $total ERRs)"
                 done
             fi
-            if [[ "$last_quantum_direction" == "down" ]]; then
-                base_backoff=$(( base_backoff * 2 ))
-                last_quantum_direction="up"
-            fi
             /usr/bin/pw-metadata -n settings 0 clock.force-quantum "$next_quantum" >/dev/null 2>&1
             last_set_quantum=$next_quantum
             quantum=$next_quantum
-            if (( log_level >= 3 )); then
-                log 3 "Will decrease quantum from $next_quantum to $((next_quantum/2)) in $base_backoff min"
-            fi
             quantum_just_changed=1
         fi
         last_decrease_or_increase_time=$now
         last_err_increase_time=$now
+        # Refresh backoff for new quantum
+        current_backoff=${quantum_backoff[$quantum]}
     fi
 
     seconds_since_increase=$(( now - last_err_increase_time ))
 
     if (( quantum > min_quantum )); then
-        if (( seconds_since_increase >= base_backoff * 60 )); then
+        if (( seconds_since_increase >= current_backoff * 60 )); then
             next_quantum=$((quantum / 2))
             next_quantum=$(clamp "$next_quantum" "$min_quantum" "$max_quantum")
-            next_backoff=$(( base_backoff / 2 ))
+            # Initialize backoff for next quantum if not set
+            if [[ -z "${quantum_backoff[$next_quantum]+set}" ]]; then
+                quantum_backoff[$next_quantum]=$current_backoff
+            fi
+            # Halve the backoff for next quantum, but at least 1
+            next_backoff=$(( quantum_backoff[$next_quantum] / 2 ))
             (( next_backoff < 1 )) && next_backoff=1
-            log 1 "↓ Decreasing quantum from $quantum to $next_quantum (next decrease in $next_backoff min)"
+            quantum_backoff[$next_quantum]=$next_backoff
+
+            log 1 "↓ Decreasing quantum from $quantum to $next_quantum (next decrease in ${quantum_backoff[$next_quantum]} min)"
+            if (( log_level >= 3 )); then
+                log 3 "↓ Decreasing quantum from $quantum to $next_quantum (next decrease in ${quantum_backoff[$next_quantum]} min)"
+            fi
             /usr/bin/pw-metadata -n settings 0 clock.force-quantum "$next_quantum" >/dev/null 2>&1
             last_set_quantum=$next_quantum
             quantum=$next_quantum
             last_decrease_or_increase_time=$now
-            base_backoff=$next_backoff
             last_err_increase_time=$now
             quantum_just_changed=1
-            last_quantum_direction="down"
+            current_backoff=${quantum_backoff[$quantum]}
         else
-            if (( log_level >= 2 )); then
-                seconds_left=$(( base_backoff * 60 - seconds_since_increase ))
+            if (( log_level >= 3 )); then
+                seconds_left=$(( current_backoff * 60 - seconds_since_increase ))
                 mins_left=$(( seconds_left / 60 ))
                 secs_rem=$(( seconds_left % 60 ))
-                log 2 "$mins_left minute(s) $secs_rem second(s) before next decrease (quant=$quantum, min=$min_quantum, max=$max_quantum)"
+                log 3 "$mins_left minute(s) $secs_rem second(s) before next decrease (quant=$quantum, min=$min_quantum, max=$max_quantum)"
             fi
         fi
     else
-        if (( log_level >= 2 )); then
+        if (( log_level >= 3 )); then
             seconds_since_increase=$(( now - last_err_increase_time ))
-            seconds_left=$(( base_backoff * 60 - seconds_since_increase ))
+            seconds_left=$(( current_backoff * 60 - seconds_since_increase ))
             (( seconds_left < 0 )) && seconds_left=0
             mins_left=$(( seconds_left / 60 ))
             secs_rem=$(( seconds_left % 60 ))
-            log 2 "Minimum quantum achieved: $mins_left minute(s) $secs_rem second(s) of backoff left (quant=$quantum, min=$min_quantum, max=$max_quantum)"
+            log 3 "Minimum quantum achieved: $mins_left minute(s) $secs_rem second(s) of backoff left (quantum=$quantum, min=$min_quantum, max=$max_quantum)"
         fi
     fi
 
-    # Always update prev_errs for all currently seen clients
+    # Always update prev_errs for all currently seen running clients
     for k in "${!curr_errs[@]}"; do prev_errs["$k"]=${curr_errs["$k"]}; done
+
+    # Remove tracking info for vanished clients
+    for key in "${!prev_errs[@]}"; do
+        if [[ -z "${curr_errs[$key]+set}" ]]; then
+            unset prev_errs[$key]
+            unset client_seen[$key]
+        fi
+    done
 done

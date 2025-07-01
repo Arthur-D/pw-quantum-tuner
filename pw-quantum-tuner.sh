@@ -81,41 +81,43 @@ interval_count=0
 quantum_just_changed=0
 last_quantum_direction="none"
 
-get_last_frame() {
-    local i last_header_idx=-1
-    for ((i=0; i<${#interval_lines[@]}; ++i)); do
-        line="${interval_lines[$i]}"
-        read -r _ _ field3 _ _ _ _ _ field9 _ <<< "$line"
-        if [[ "$field9" == "ERR" && "$field3" == "QUANT" ]]; then
-            last_header_idx=$i
-        fi
+declare -A pwtop_col_idx
+
+find_pwtop_columns() {
+    local header="$1"
+    local idx=1
+    for col in $header; do
+        col_lc=$(echo "$col" | tr '[:upper:]' '[:lower:]')
+        case "$col_lc" in
+            id)     pwtop_col_idx["id"]=$idx ;;
+            quant)  pwtop_col_idx["quant"]=$idx ;;
+            err)    pwtop_col_idx["err"]=$idx ;;
+            name)   pwtop_col_idx["name"]=$idx ;;
+            *)      ;; # ignore other columns
+        esac
+        idx=$((idx+1))
     done
-    if (( last_header_idx < 0 )); then
-        printf "%s\n" "${interval_lines[@]}"
-    else
-        for ((i=last_header_idx+1; i<${#interval_lines[@]}; ++i)); do
-            printf "%s\n" "${interval_lines[$i]}"
-        done
-    fi
 }
 
 parse_client() {
     local line="$1"
     [[ "$line" =~ ^[[:space:]]*$ ]] && return 1
-    local field1 field2 field3 field4 field5 field6 field7 field8 field9
-    read -r field1 field2 field3 field4 field5 field6 field7 field8 field9 _ <<< "$line"
-    if [[ "$field9" == "ERR" && "$field3" == "QUANT" ]]; then
-        return 1
-    fi
-    [[ ! "$field9" =~ ^[0-9]+$ ]] && return 1
-    local role quant err name id
-    role="$field1"
-    id="$field2"
-    quant="$field3"
-    err="$field9"
-    name=$(awk '{print $NF}' <<<"$line")
-    [[ -z "$name" || "$name" == "0" || "$name" == "ERR" ]] && return 1
+    # Skip the header and separator lines
+    [[ "$line" =~ ^\ *[A-Z]\ +ID\ +QUANT ]] && return 1
+    [[ "$line" =~ ^\ *[-]+ ]] && return 1
+    # Parse role (first column always)
+    local role
+    role=$(awk '{print $1}' <<< "$line")
+    [[ -z "$role" ]] && return 1
+    # Extract fields using the dynamic column indexes
+    local id quant err name
+    id=$(awk -v idx="${pwtop_col_idx["id"]}" '{print $idx}' <<< "$line")
+    quant=$(awk -v idx="${pwtop_col_idx["quant"]}" '{print $idx}' <<< "$line")
+    err=$(awk -v idx="${pwtop_col_idx["err"]}" '{print $idx}' <<< "$line")
+    name=$(awk -v idx="${pwtop_col_idx["name"]}" '{for(i=idx;i<=NF;++i) {printf "%s ", $i}; print ""}' <<< "$line" | sed 's/ *$//')
+    [[ -z "$id" || -z "$quant" || -z "$err" ]] && return 1
     key="$id"
+    log 3 "Parsed client: key=$key, name=$name, err=$err, quant=$quant, role=$role, line='$line'"
     printf "%s\n%s\n%s\n%s\n%s\n" "$key" "$name" "$err" "$quant" "$role"
     return 0
 }
@@ -129,6 +131,8 @@ clamp() {
     echo "$val"
 }
 
+header_found=0
+pwtop_header=""
 pw-top -b | while read -r line; do
     now=$(date +%s)
     interval_lines+=("$line")
@@ -139,9 +143,19 @@ pw-top -b | while read -r line; do
     declare -A curr_errs client_pretty_names client_quants client_roles
 
     frame_lines=()
-    while IFS= read -r frame_line; do
+    header_found=0
+    for frame_line in "${interval_lines[@]}"; do
+        if [[ $header_found -eq 0 && "$frame_line" =~ ID[[:space:]]+QUANT ]]; then
+            find_pwtop_columns "$frame_line"
+            pwtop_header="$frame_line"
+            header_found=1
+            continue
+        fi
         frame_lines+=("$frame_line")
-    done < <(get_last_frame)
+    done
+
+    log 3 "pw-top header: $pwtop_header"
+    log 3 "Frame lines parsed: ${#frame_lines[@]}"
 
     for line_in in "${frame_lines[@]}"; do
         parsed=($(parse_client "$line_in"))
@@ -159,6 +173,7 @@ pw-top -b | while read -r line; do
         client_pretty_names["$key"]="$name"
         client_quants["$key"]=$quant
         client_roles["$key"]=$role
+        log 3 "Client: PID=$key, Name=$name, Role=$role, Quantum=$quant, ERR=$err"
     done
     interval_lines=()
 
@@ -177,6 +192,7 @@ pw-top -b | while read -r line; do
             prev_errs["$k"]=${curr_errs["$k"]}
         done
         quantum_just_changed=0
+        log 3 "Quantum just changed, resetting prev_errs and skipping delta detection"
         continue
     fi
 
@@ -190,22 +206,31 @@ pw-top -b | while read -r line; do
         fi
         curr_val=${curr_errs[$key]:-0}
         prev_val=${prev_errs[$key]:-unset}
+        log 3 "Increase check for $key (${client_pretty_names[$key]}): prev_val=${prev_val}, curr_val=${curr_val}"
         if [[ -z "${client_seen[$key]+set}" ]]; then
             # First time ever seen: initialize, do not report
             client_seen[$key]=1
             prev_errs[$key]=$curr_val
+            log 3 "First time seeing $key (${client_pretty_names[$key]}), initializing prev_errs to $curr_val"
             continue
         fi
         if [[ "$prev_val" == "unset" ]]; then
             # Reappeared after missing: re-initialize, do not report
             prev_errs[$key]=$curr_val
+            log 3 "$key (${client_pretty_names[$key]}) reappeared, initializing prev_errs to $curr_val"
             continue
         fi
         if (( curr_val > prev_val )); then
             increase_names+=("$key")
             increase_amounts+=("$((curr_val - prev_val))")
             increased_this_interval=1
+            log 3 "ERR increased for $key (${client_pretty_names[$key]}): $prev_val → $curr_val (delta $((curr_val - prev_val)))"
         fi
+    done
+
+    # Show full ERR map for debug
+    for key in "${!curr_errs[@]}"; do
+        log 3 "curr_errs[$key]=${curr_errs[$key]}, prev_errs[$key]=${prev_errs[$key]:-unset}, name=${client_pretty_names[$key]}"
     done
 
     quantum_changed=0
@@ -237,6 +262,7 @@ pw-top -b | while read -r line; do
                     log 2 "  ${client_pretty_names[$key]} ($delta new ERRs, total $total ERRs)"
                 done
             fi
+            log 3 "Setting quantum to $next_quantum (was $quantum)"
             /usr/bin/pw-metadata -n settings 0 clock.force-quantum "$next_quantum" >/dev/null 2>&1
             last_set_quantum=$next_quantum
             quantum=$next_quantum
@@ -264,9 +290,7 @@ pw-top -b | while read -r line; do
             quantum_backoff[$next_quantum]=$next_backoff
 
             log 1 "↓ Decreasing quantum from $quantum to $next_quantum (next decrease in ${quantum_backoff[$next_quantum]} min)"
-            if (( log_level >= 3 )); then
-                log 3 "↓ Decreasing quantum from $quantum to $next_quantum (next decrease in ${quantum_backoff[$next_quantum]} min)"
-            fi
+            log 3 "Setting quantum to $next_quantum (was $quantum)"
             /usr/bin/pw-metadata -n settings 0 clock.force-quantum "$next_quantum" >/dev/null 2>&1
             last_set_quantum=$next_quantum
             quantum=$next_quantum
@@ -299,8 +323,14 @@ pw-top -b | while read -r line; do
     # Remove tracking info for vanished clients
     for key in "${!prev_errs[@]}"; do
         if [[ -z "${curr_errs[$key]+set}" ]]; then
+            log 3 "$key vanished from curr_errs, removing from prev_errs and client_seen"
             unset prev_errs[$key]
             unset client_seen[$key]
         fi
     done
+
+    log 3 "Current state: quantum=$quantum, min=$min_quantum, max=$max_quantum, interval_count=$interval_count, current_backoff=$current_backoff"
+    log 3 "Backoff map: $(declare -p quantum_backoff 2>/dev/null)"
+    log 3 "prev_errs: $(declare -p prev_errs 2>/dev/null)"
+    log 3 "curr_errs: $(declare -p curr_errs 2>/dev/null)"
 done

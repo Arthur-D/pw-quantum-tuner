@@ -121,13 +121,13 @@ clamp() {
     echo "$val"
 }
 
-# --- Frame-based ERR/quantum logic begins here ---
-
 clients_with_new_errs=()
+seen_this_frame=()
 
 process_frame() {
     local quantum_increased=0
     local increased_clients=()
+    # For all clients found in this frame, detect error increases
     for key in "${!curr_errs[@]}"; do
         local curr_val=${curr_errs[$key]:-0}
         local prev_val=${prev_errs[$key]:-0}
@@ -208,7 +208,7 @@ process_frame() {
         fi
     fi
 
-    # Update prev_errs for all clients
+    # Only update prev_errs for clients actually seen in this frame
     for key in "${!curr_errs[@]}"; do
         prev_errs[$key]=${curr_errs[$key]}
     done

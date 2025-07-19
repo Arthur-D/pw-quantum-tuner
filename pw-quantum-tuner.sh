@@ -3,6 +3,9 @@
 base_backoff=1
 check_interval=1
 
+# Minimum time in seconds between quantum increases
+min_increase_cooldown=1
+
 log_level=1
 for arg in "$@"; do
     case "$arg" in
@@ -69,6 +72,7 @@ default_backoff=1
 
 last_decrease_or_increase_time=0
 last_err_increase_time=0
+last_increase_time=0
 
 if (( log_level >= 1 )); then
     echo "Starting PipeWire quantum tuner at log level $log_level (quant=$quantum, min=$min_quantum, max=$max_quantum)"
@@ -146,7 +150,11 @@ process_frame() {
         fi
     done
 
-    if (( ${#clients_with_new_errs[@]} > 0 )); then
+    # Only allow quantum increase if cooldown has elapsed
+    now=$(date +%s)
+    seconds_since_increase=$(( now - last_increase_time ))
+
+    if (( ${#clients_with_new_errs[@]} > 0 )) && (( seconds_since_increase >= min_increase_cooldown )); then
         next_quantum=$((quantum * 2))
         next_quantum=$(clamp "$next_quantum" "$min_quantum" "$max_quantum")
         if (( next_quantum > quantum )); then
@@ -177,18 +185,18 @@ process_frame() {
             /usr/bin/pw-metadata -n settings 0 clock.force-quantum "$next_quantum" >/dev/null 2>&1
             last_set_quantum=$next_quantum
             quantum=$next_quantum
-            last_decrease_or_increase_time=$(date +%s)
-            last_err_increase_time=$last_decrease_or_increase_time
+            last_decrease_or_increase_time=$now
+            last_err_increase_time=$now
+            last_increase_time=$now
         fi
     fi
 
     # Quantum decrease (as before)
-    now=$(date +%s)
     if [[ -z "${quantum_backoff[$quantum]+set}" ]]; then
         quantum_backoff[$quantum]=$default_backoff
     fi
     current_backoff=${quantum_backoff[$quantum]}
-    seconds_since_increase=$(( now - last_err_increase_time ))
+    seconds_since_for_decrease=$(( now - last_err_increase_time ))
     loadavg=$(awk '{print $1}' /proc/loadavg)
     if (( current_backoff > 1 )) && awk "BEGIN {exit !($loadavg < 1.0)}"; then
         old_backoff=$current_backoff
@@ -198,7 +206,7 @@ process_frame() {
         log 1 "↳ System load is low ($loadavg), halving decrease backoff: $old_backoff → $current_backoff min"
     fi
     if (( quantum > min_quantum )); then
-        if (( seconds_since_increase >= current_backoff * 60 )); then
+        if (( seconds_since_for_decrease >= current_backoff * 60 )); then
             next_quantum=$((quantum / 2))
             next_quantum=$(clamp "$next_quantum" "$min_quantum" "$max_quantum")
             if [[ -z "${quantum_backoff[$next_quantum]+set}" ]]; then
@@ -213,6 +221,8 @@ process_frame() {
             quantum=$next_quantum
             last_decrease_or_increase_time=$now
             last_err_increase_time=$now
+            # Reset last_increase_time so that if an error occurs immediately after decrease, increase is not blocked
+            last_increase_time=0
         fi
     fi
 

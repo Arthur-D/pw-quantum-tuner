@@ -4,6 +4,22 @@
 
 ---
 
+## Why use this?
+
+- **Lower latency**: Always seeks the smallest quantum your system can handle.
+- **Automatic recovery**: If audio glitches/errors occur, quantum is increased for stability.
+- **Hands-off**: No manual tuning or guessing buffer sizes.
+
+---
+
+## Sounds great! Why not use this then?
+
+- **Latency changes**: Less predictable, so if you use a Digital Audio Workstation you probably don't want this.
+- **Creates small audio gaps**: When the PipeWire quantum changes, you get short audio gaps as a side effect.
+- **Might expose audio device issues**: Very rarely, but sometimes changing the quantum leads to my Bluetooth audio headset disconnecting.
+
+---
+
 ## How It Works
 
 - **Watches PipeWire clients in real time** using `pw-top`.
@@ -46,15 +62,6 @@
 
 - Run with `--log-level 3` for detailed logs (including every parsed client and all state transitions).
 - Quantum changes and reasons (error surges, timeouts) are always logged at level 1.
-
----
-
-## Why Use This?
-
-- **Lower latency**: Always seeks the smallest quantum your system can handle.
-- **Automatic recovery**: If audio glitches/errors occur, quantum is increased for stability.
-- **Hands-off**: No manual tuning or guessing buffer sizes.
-
 ---
 
 ## Notes

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 base_backoff=1
-check_interval=2
+check_interval=1
 
 log_level=1
 for arg in "$@"; do
@@ -275,6 +275,16 @@ pw-top -b | while read -r line; do
     fi
 
     seconds_since_increase=$(( now - last_err_increase_time ))
+
+    # Patch: halve backoff if loadavg is low and backoff > 1
+    loadavg=$(awk '{print $1}' /proc/loadavg)
+    if (( current_backoff > 1 )) && awk "BEGIN {exit !($loadavg < 1.0)}"; then
+        old_backoff=$current_backoff
+        current_backoff=$((old_backoff / 2))
+        (( current_backoff < 1 )) && current_backoff=1
+        quantum_backoff[$quantum]=$current_backoff
+        log 1 "↳ System load is low ($loadavg), halving decrease backoff: $old_backoff → $current_backoff min"
+    fi
 
     if (( quantum > min_quantum )); then
         if (( seconds_since_increase >= current_backoff * 60 )); then

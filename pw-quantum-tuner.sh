@@ -127,7 +127,16 @@ seen_this_frame=()
 process_frame() {
     local quantum_increased=0
     local increased_clients=()
-    # For all clients found in this frame, detect error increases
+
+    # Initialize prev_errs for new clients
+    for key in "${!curr_errs[@]}"; do
+        local curr_val=${curr_errs[$key]:-0}
+        if [[ -z "${prev_errs[$key]+set}" ]]; then
+            prev_errs[$key]=$curr_val
+        fi
+    done
+
+    # Detect new ERRs
     for key in "${!curr_errs[@]}"; do
         local curr_val=${curr_errs[$key]:-0}
         local prev_val=${prev_errs[$key]:-0}
@@ -173,14 +182,13 @@ process_frame() {
         fi
     fi
 
-    # Quantum decrease logic (timer-based, once per frame)
+    # Quantum decrease (as before)
     now=$(date +%s)
     if [[ -z "${quantum_backoff[$quantum]+set}" ]]; then
         quantum_backoff[$quantum]=$default_backoff
     fi
     current_backoff=${quantum_backoff[$quantum]}
     seconds_since_increase=$(( now - last_err_increase_time ))
-    # Patch: halve backoff if loadavg is low and backoff > 1
     loadavg=$(awk '{print $1}' /proc/loadavg)
     if (( current_backoff > 1 )) && awk "BEGIN {exit !($loadavg < 1.0)}"; then
         old_backoff=$current_backoff

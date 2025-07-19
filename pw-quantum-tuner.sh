@@ -63,7 +63,7 @@ else
 fi
 last_set_quantum=$quantum
 
-declare -A prev_errs curr_errs client_pretty_names client_quants client_seen client_roles
+declare -A prev_errs curr_errs client_pretty_names client_quants client_roles
 declare -A quantum_backoff
 default_backoff=1
 
@@ -121,83 +121,64 @@ clamp() {
     echo "$val"
 }
 
-header_found=0
-pwtop_header=""
-pw-top -b | while read -r line; do
-    # Find and parse header
-    if [[ "$line" =~ ID[[:space:]]+QUANT ]]; then
-        find_pwtop_columns "$line"
-        pwtop_header="$line"
-        header_found=1
-        continue
-    fi
+# --- Frame-based ERR/quantum logic begins here ---
 
-    parsed=($(parse_client "$line"))
-    [[ $? != 0 ]] && continue
-    key="${parsed[0]}"
-    name="${parsed[1]}"
-    err="${parsed[2]}"
-    quant_client="${parsed[3]}"
-    role="${parsed[4]}"
+clients_with_new_errs=()
 
-    if [[ "$role" != "R" ]]; then
-        continue
-    fi
+process_frame() {
+    local quantum_increased=0
+    local increased_clients=()
+    for key in "${!curr_errs[@]}"; do
+        local curr_val=${curr_errs[$key]:-0}
+        local prev_val=${prev_errs[$key]:-0}
+        if (( curr_val > prev_val )); then
+            clients_with_new_errs+=("$key")
+            increased_clients+=("$key")
+        fi
+    done
 
-    curr_errs["$key"]=$err
-    client_pretty_names["$key"]="$name"
-    client_quants["$key"]=$quant_client
-    client_roles["$key"]=$role
-
-    # Initialize backoff for current quantum if not set
-    if [[ -z "${quantum_backoff[$quantum]+set}" ]]; then
-        quantum_backoff[$quantum]=$default_backoff
-    fi
-    current_backoff=${quantum_backoff[$quantum]}
-
-    quantum=$(clamp "$quantum" "$min_quantum" "$max_quantum")
-
-    # Delta ERRs for this client
-    curr_val=${curr_errs[$key]:-0}
-    prev_val=${prev_errs[$key]:-unset}
-    if [[ -z "${client_seen[$key]+set}" ]]; then
-        client_seen[$key]=1
-        prev_errs[$key]=$curr_val
-        continue
-    fi
-    if [[ "$prev_val" == "unset" ]]; then
-        prev_errs[$key]=$curr_val
-        continue
-    fi
-
-    # --- INSTANT REACTION TO ERR INCREASE ---
-    if (( curr_val > prev_val )); then
+    if (( ${#clients_with_new_errs[@]} > 0 )); then
         next_quantum=$((quantum * 2))
         next_quantum=$(clamp "$next_quantum" "$min_quantum" "$max_quantum")
-        # Only increase if actually needed
         if (( next_quantum > quantum )); then
-            # Double the backoff for next quantum when increasing
+            # Backoff handling
+            if [[ -z "${quantum_backoff[$quantum]+set}" ]]; then
+                quantum_backoff[$quantum]=$default_backoff
+            fi
             if [[ -z "${quantum_backoff[$next_quantum]+set}" ]]; then
-                quantum_backoff[$next_quantum]=$current_backoff
+                quantum_backoff[$next_quantum]=${quantum_backoff[$quantum]}
             fi
             quantum_backoff[$next_quantum]=$(( quantum_backoff[$next_quantum] * 2 ))
-            delta=$((curr_val - prev_val))
-            msg="↑ Increasing quantum from $quantum to $next_quantum due to $delta new ERRs (next decrease in ${quantum_backoff[$next_quantum]} min)"
+            # Log
+            deltas=()
+            for key in "${increased_clients[@]}"; do
+                delta=$((curr_errs[$key] - prev_errs[$key]))
+                name="${client_pretty_names[$key]}"
+                deltas+=("  $name ($delta new ERRs, total ${curr_errs[$key]} ERRs)")
+            done
+            total_delta=0
+            for key in "${increased_clients[@]}"; do
+                total_delta=$((total_delta + curr_errs[$key] - prev_errs[$key]))
+            done
+            msg="↑ Increasing quantum from $quantum to $next_quantum due to $total_delta new ERRs (next decrease in ${quantum_backoff[$next_quantum]} min)"
             log 1 "$msg"
             if (( log_level >= 2 )); then
-                log 2 "  $name ($delta new ERRs, total $curr_val ERRs)"
+                for line in "${deltas[@]}"; do log 2 "$line"; done
             fi
             /usr/bin/pw-metadata -n settings 0 clock.force-quantum "$next_quantum" >/dev/null 2>&1
             last_set_quantum=$next_quantum
             quantum=$next_quantum
-            # Update backoff timers
             last_decrease_or_increase_time=$(date +%s)
             last_err_increase_time=$last_decrease_or_increase_time
         fi
     fi
 
-    # Decrease quantum logic is still timer-based.
+    # Quantum decrease logic (timer-based, once per frame)
     now=$(date +%s)
+    if [[ -z "${quantum_backoff[$quantum]+set}" ]]; then
+        quantum_backoff[$quantum]=$default_backoff
+    fi
+    current_backoff=${quantum_backoff[$quantum]}
     seconds_since_increase=$(( now - last_err_increase_time ))
     # Patch: halve backoff if loadavg is low and backoff > 1
     loadavg=$(awk '{print $1}' /proc/loadavg)
@@ -227,13 +208,59 @@ pw-top -b | while read -r line; do
         fi
     fi
 
-    prev_errs["$key"]=$curr_val
+    # Update prev_errs for all clients
+    for key in "${!curr_errs[@]}"; do
+        prev_errs[$key]=${curr_errs[$key]}
+    done
 
     # Remove tracking info for vanished clients
     for gone_key in "${!prev_errs[@]}"; do
         if [[ -z "${curr_errs[$gone_key]+set}" ]]; then
             unset prev_errs[$gone_key]
-            unset client_seen[$gone_key]
         fi
     done
+
+    # Clear for next frame
+    clients_with_new_errs=()
+    curr_errs=()
+    client_pretty_names=()
+    client_quants=()
+    client_roles=()
+}
+
+header_found=0
+pwtop_header=""
+frame_started=0
+
+pw-top -b | while read -r line; do
+    # Detect new frame by header line
+    if [[ "$line" =~ ID[[:space:]]+QUANT ]]; then
+        if (( frame_started )); then
+            process_frame
+        fi
+        find_pwtop_columns "$line"
+        pwtop_header="$line"
+        frame_started=1
+        continue
+    fi
+
+    parsed=($(parse_client "$line"))
+    [[ $? != 0 ]] && continue
+    key="${parsed[0]}"
+    name="${parsed[1]}"
+    err="${parsed[2]}"
+    quant_client="${parsed[3]}"
+    role="${parsed[4]}"
+
+    if [[ "$role" != "R" ]]; then
+        continue
+    fi
+
+    curr_errs["$key"]=$err
+    client_pretty_names["$key"]="$name"
+    client_quants["$key"]=$quant_client
+    client_roles["$key"]=$role
 done
+
+# process last frame if script is exiting
+process_frame

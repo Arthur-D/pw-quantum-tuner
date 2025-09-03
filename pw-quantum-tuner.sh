@@ -154,6 +154,16 @@ process_frame() {
     now=$(date +%s)
     seconds_since_increase=$(( now - last_increase_time ))
 
+    # Debug logging for quantum increase decision
+    if (( ${#clients_with_new_errs[@]} > 0 )); then
+        log 3 "New ERRs detected (${#clients_with_new_errs[@]} clients), evaluating quantum increase..."
+        if (( seconds_since_increase < min_increase_cooldown )); then
+            log 2 "Quantum increase blocked: cooldown period active (${seconds_since_increase}s < ${min_increase_cooldown}s)"
+        fi
+    else
+        log 3 "No new ERRs detected, quantum increase not needed"
+    fi
+
     if (( ${#clients_with_new_errs[@]} > 0 )) && (( seconds_since_increase >= min_increase_cooldown )); then
         next_quantum=$((quantum * 2))
         next_quantum=$(clamp "$next_quantum" "$min_quantum" "$max_quantum")
@@ -188,6 +198,8 @@ process_frame() {
             last_decrease_or_increase_time=$now
             last_err_increase_time=$now
             last_increase_time=$now
+        else
+            log 2 "Quantum increase blocked: already at maximum (current=$quantum, max=$max_quantum)"
         fi
     fi
 

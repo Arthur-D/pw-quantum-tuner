@@ -86,14 +86,26 @@ find_pwtop_columns() {
     for col in $header; do
         col_lc=$(echo "$col" | tr '[:upper:]' '[:lower:]')
         case "$col_lc" in
-            id)     pwtop_col_idx["id"]=$idx ;;
-            quant)  pwtop_col_idx["quant"]=$idx ;;
-            err)    pwtop_col_idx["err"]=$idx ;;
-            name)   pwtop_col_idx["name"]=$idx ;;
-            *)      ;;
+            id)             pwtop_col_idx["id"]=$idx ;;
+            quant|quantum)  pwtop_col_idx["quant"]=$idx ;;
+            err|error|errs) pwtop_col_idx["err"]=$idx ;;
+            name)           pwtop_col_idx["name"]=$idx ;;
+            *)              ;;
         esac
         idx=$((idx+1))
     done
+    
+    # Debug: log detected columns at startup
+    if (( log_level >= 2 )); then
+        log 2 "Column detection from header: $header"
+        for col_name in id quant err name; do
+            if [[ -n "${pwtop_col_idx[$col_name]}" ]]; then
+                log 2 "  $col_name -> column ${pwtop_col_idx[$col_name]}"
+            else
+                log 2 "  $col_name -> NOT FOUND"
+            fi
+        done
+    fi
 }
 
 parse_client() {
@@ -105,11 +117,22 @@ parse_client() {
     role=$(awk '{print $1}' <<< "$line")
     [[ -z "$role" ]] && return 1
     local id quant err name
+    
+    # Check if required column indices are available
+    if [[ -z "${pwtop_col_idx["id"]}" || -z "${pwtop_col_idx["quant"]}" || -z "${pwtop_col_idx["err"]}" ]]; then
+        log 3 "Skipping client line - missing column indices (id:${pwtop_col_idx["id"]}, quant:${pwtop_col_idx["quant"]}, err:${pwtop_col_idx["err"]})"
+        return 1
+    fi
+    
     id=$(awk -v idx="${pwtop_col_idx["id"]}" '{print $idx}' <<< "$line")
     quant=$(awk -v idx="${pwtop_col_idx["quant"]}" '{print $idx}' <<< "$line")
     err=$(awk -v idx="${pwtop_col_idx["err"]}" '{print $idx}' <<< "$line")
     name=$(awk -v idx="${pwtop_col_idx["name"]}" '{for(i=idx;i<=NF;++i) {printf "%s ", $i}; print ""}' <<< "$line" | sed 's/ *$//')
-    [[ -z "$id" || -z "$quant" || -z "$err" ]] && return 1
+    
+    [[ -z "$id" || -z "$quant" || -z "$err" ]] && {
+        log 3 "Skipping client line - empty required fields (id:'$id', quant:'$quant', err:'$err')"
+        return 1
+    }
     key="$id"
     log 3 "Parsed client: key=$key, name=$name, err=$err, quant=$quant, role=$role, line='$line'"
     printf "%s\n%s\n%s\n%s\n%s\n" "$key" "$name" "$err" "$quant" "$role"
@@ -157,6 +180,7 @@ process_frame() {
     # Debug logging for quantum increase decision
     if (( ${#clients_with_new_errs[@]} > 0 )); then
         log 3 "New ERRs detected (${#clients_with_new_errs[@]} clients), evaluating quantum increase..."
+        log 3 "  Current quantum: $quantum, would increase to: $((quantum * 2))"
         if (( seconds_since_increase < min_increase_cooldown )); then
             log 2 "Quantum increase blocked: cooldown period active (${seconds_since_increase}s < ${min_increase_cooldown}s)"
         fi
@@ -192,7 +216,12 @@ process_frame() {
             if (( log_level >= 2 )); then
                 for line in "${deltas[@]}"; do log 2 "$line"; done
             fi
-            /usr/bin/pw-metadata -n settings 0 clock.force-quantum "$next_quantum" >/dev/null 2>&1
+            log 3 "Executing: pw-metadata -n settings 0 clock.force-quantum $next_quantum"
+            if /usr/bin/pw-metadata -n settings 0 clock.force-quantum "$next_quantum" >/dev/null 2>&1; then
+                log 3 "pw-metadata command succeeded"
+            else
+                log 1 "ERROR: pw-metadata command failed!"
+            fi
             last_set_quantum=$next_quantum
             quantum=$next_quantum
             last_decrease_or_increase_time=$now
@@ -228,7 +257,12 @@ process_frame() {
             (( next_backoff < 1 )) && next_backoff=1
             quantum_backoff[$next_quantum]=$next_backoff
             log 1 "↓ Decreasing quantum from $quantum to $next_quantum (next decrease in ${quantum_backoff[$next_quantum]} min)"
-            /usr/bin/pw-metadata -n settings 0 clock.force-quantum "$next_quantum" >/dev/null 2>&1
+            log 3 "Executing: pw-metadata -n settings 0 clock.force-quantum $next_quantum"
+            if /usr/bin/pw-metadata -n settings 0 clock.force-quantum "$next_quantum" >/dev/null 2>&1; then
+                log 3 "pw-metadata command succeeded"
+            else
+                log 1 "ERROR: pw-metadata command failed!"
+            fi
             last_set_quantum=$next_quantum
             quantum=$next_quantum
             last_decrease_or_increase_time=$now
@@ -266,11 +300,13 @@ pw-top -b | while read -r line; do
     # Detect new frame by header line
     if [[ "$line" =~ ID[[:space:]]+QUANT ]]; then
         if (( frame_started )); then
+            log 3 "Processing frame with ${#curr_errs[@]} clients"
             process_frame
         fi
         find_pwtop_columns "$line"
         pwtop_header="$line"
         frame_started=1
+        log 3 "New frame detected: $line"
         continue
     fi
 

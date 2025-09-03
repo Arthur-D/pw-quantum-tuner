@@ -111,7 +111,7 @@ find_pwtop_columns() {
 parse_client() {
     local line="$1"
     [[ "$line" =~ ^[[:space:]]*$ ]] && return 1
-    [[ "$line" =~ ^\ *[A-Z]\ +ID\ +QUANT ]] && return 1
+    [[ "$line" =~ ^\ *[A-Z]\ +ID\ +(QUANT|QUANTUM) ]] && return 1
     [[ "$line" =~ ^\ *[-]+ ]] && return 1
     local role
     role=$(awk '{print $1}' <<< "$line")
@@ -298,7 +298,7 @@ frame_started=0
 
 pw-top -b | while read -r line; do
     # Detect new frame by header line
-    if [[ "$line" =~ ID[[:space:]]+QUANT ]]; then
+    if [[ "$line" =~ ID[[:space:]]+(QUANT|QUANTUM) ]]; then
         if (( frame_started )); then
             log 3 "Processing frame with ${#curr_errs[@]} clients"
             process_frame

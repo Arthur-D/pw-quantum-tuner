@@ -160,6 +160,7 @@ process_frame() {
         local curr_val=${curr_errs[$key]:-0}
         if [[ -z "${prev_errs[$key]+set}" ]]; then
             prev_errs[$key]=$curr_val
+            log 3 "Initializing prev_errs for new client $key (${client_pretty_names[$key]:-unknown}): $curr_val"
         fi
     done
 
@@ -167,9 +168,11 @@ process_frame() {
     for key in "${!curr_errs[@]}"; do
         local curr_val=${curr_errs[$key]:-0}
         local prev_val=${prev_errs[$key]:-0}
+        log 3 "Checking client $key (${client_pretty_names[$key]:-unknown}): curr=$curr_val, prev=$prev_val"
         if (( curr_val > prev_val )); then
             clients_with_new_errs+=("$key")
             increased_clients+=("$key")
+            log 3 "  -> ERROR INCREASE DETECTED: $prev_val -> $curr_val"
         fi
     done
 
@@ -185,7 +188,19 @@ process_frame() {
             log 2 "Quantum increase blocked: cooldown period active (${seconds_since_increase}s < ${min_increase_cooldown}s)"
         fi
     else
-        log 3 "No new ERRs detected, quantum increase not needed"
+        log 2 "No new ERRs detected, quantum increase not needed"
+        # Additional debugging: show what clients were checked
+        if (( ${#curr_errs[@]} > 0 )); then
+            log 3 "Checked ${#curr_errs[@]} clients for error increases:"
+            for key in "${!curr_errs[@]}"; do
+                curr_val=${curr_errs[$key]:-0}
+                prev_val=${prev_errs[$key]:-0}
+                name="${client_pretty_names[$key]:-unknown}"
+                log 3 "  $name (ID:$key): curr=$curr_val, prev=$prev_val"
+            done
+        else
+            log 3 "No clients found in current frame"
+        fi
     fi
 
     if (( ${#clients_with_new_errs[@]} > 0 )) && (( seconds_since_increase >= min_increase_cooldown )); then

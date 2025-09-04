@@ -313,7 +313,7 @@ pwtop_header=""
 frame_started=0
 last_frame_time=0
 # Maximum time to wait before processing accumulated frame data (seconds)
-max_frame_wait=5
+max_frame_wait=1
 
 pw-top -b | while read -r line; do
     # Check if we should process frame due to timeout

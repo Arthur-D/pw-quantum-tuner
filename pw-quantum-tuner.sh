@@ -188,7 +188,7 @@ process_frame() {
             log 2 "Quantum increase blocked: cooldown period active (${seconds_since_increase}s < ${min_increase_cooldown}s)"
         fi
     else
-        log 2 "No new ERRs detected, quantum increase not needed"
+        log 3 "No new ERRs detected, quantum increase not needed"
         # Additional debugging: show what clients were checked
         if (( ${#curr_errs[@]} > 0 )); then
             log 3 "Checked ${#curr_errs[@]} clients for error increases:"

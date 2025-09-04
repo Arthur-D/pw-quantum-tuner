@@ -308,8 +308,21 @@ process_frame() {
 header_found=0
 pwtop_header=""
 frame_started=0
+last_frame_time=0
+# Maximum time to wait before processing accumulated frame data (seconds)
+max_frame_wait=5
 
 pw-top -b | while read -r line; do
+    # Check if we should process frame due to timeout
+    current_time=$(date +%s)
+    if (( frame_started && current_time - last_frame_time >= max_frame_wait && ${#curr_errs[@]} > 0 )); then
+        elapsed_time=$((current_time - last_frame_time))
+        client_count=${#curr_errs[@]}
+        log 3 "Processing frame due to timeout (${elapsed_time}s since last frame, ${client_count} clients)"
+        process_frame
+        last_frame_time=$current_time
+    fi
+    
     # Detect new frame by header line
     if [[ "$line" =~ ID[[:space:]]+(QUANT|QUANTUM) ]]; then
         if (( frame_started )); then
@@ -319,6 +332,7 @@ pw-top -b | while read -r line; do
         find_pwtop_columns "$line"
         pwtop_header="$line"
         frame_started=1
+        last_frame_time=$current_time
         log 3 "New frame detected: $line"
         continue
     fi

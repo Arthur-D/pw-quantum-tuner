@@ -281,7 +281,6 @@ process_frame() {
             last_set_quantum=$next_quantum
             quantum=$next_quantum
             last_decrease_or_increase_time=$now
-            last_err_increase_time=$now
             # Reset last_increase_time so that if an error occurs immediately after decrease, increase is not blocked
             last_increase_time=0
         fi

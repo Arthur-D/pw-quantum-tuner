@@ -4,7 +4,7 @@ base_backoff=1
 check_interval=1
 
 # Minimum time in seconds between quantum increases
-min_increase_cooldown=10
+min_increase_cooldown=5
 
 log_level=1
 for arg in "$@"; do

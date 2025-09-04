@@ -183,6 +183,7 @@ process_frame() {
     if (( ${#clients_with_new_errs[@]} > 0 )); then
         log 3 "New ERRs detected (${#clients_with_new_errs[@]} clients), evaluating quantum increase..."
         log 3 "  Current quantum: $quantum, would increase to: $((quantum * 2))"
+        log 3 "  Seconds since last increase: $seconds_since_increase, cooldown: $min_increase_cooldown"
         if (( seconds_since_increase < min_increase_cooldown )); then
             log 2 "Quantum increase blocked: cooldown period active (${seconds_since_increase}s < ${min_increase_cooldown}s)"
         fi
@@ -251,7 +252,8 @@ process_frame() {
         quantum_backoff[$quantum]=$default_backoff
     fi
     current_backoff=${quantum_backoff[$quantum]}
-    seconds_since_for_decrease=$(( now - last_err_increase_time ))
+    seconds_since_for_decrease=$(( now - last_decrease_or_increase_time ))
+    log 3 "Decrease evaluation: quantum=$quantum, backoff=${current_backoff}min, seconds_since_change=$seconds_since_for_decrease"
     loadavg=$(awk '{print $1}' /proc/loadavg)
     if (( current_backoff > 1 )) && awk "BEGIN {exit !($loadavg < 1.0)}"; then
         old_backoff=$current_backoff
@@ -264,10 +266,12 @@ process_frame() {
         if (( seconds_since_for_decrease >= current_backoff * 60 )); then
             next_quantum=$((quantum / 2))
             next_quantum=$(clamp "$next_quantum" "$min_quantum" "$max_quantum")
+            # Calculate next backoff before updating quantum_backoff array
             if [[ -z "${quantum_backoff[$next_quantum]+set}" ]]; then
-                quantum_backoff[$next_quantum]=$current_backoff
+                next_backoff=$(( current_backoff / 2 ))
+            else
+                next_backoff=$(( quantum_backoff[$next_quantum] / 2 ))
             fi
-            next_backoff=$(( quantum_backoff[$next_quantum] / 2 ))
             (( next_backoff < 1 )) && next_backoff=1
             quantum_backoff[$next_quantum]=$next_backoff
             log 1 "↓ Decreasing quantum from $quantum to $next_quantum (next decrease in ${quantum_backoff[$next_quantum]} min)"
@@ -280,8 +284,7 @@ process_frame() {
             last_set_quantum=$next_quantum
             quantum=$next_quantum
             last_decrease_or_increase_time=$now
-            # Reset last_increase_time so that if an error occurs immediately after decrease, increase is not blocked
-            last_increase_time=0
+            # Note: Keep last_increase_time unchanged to maintain increase cooldown
         fi
     fi
 

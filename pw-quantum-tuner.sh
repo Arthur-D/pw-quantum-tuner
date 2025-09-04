@@ -134,7 +134,6 @@ parse_client() {
         return 1
     }
     key="$id"
-    log 3 "Parsed client: key=$key, name=$name, err=$err, quant=$quant, role=$role, line='$line'"
     printf "%s\n%s\n%s\n%s\n%s\n" "$key" "$name" "$err" "$quant" "$role"
     return 0
 }
@@ -324,13 +323,18 @@ pw-top -b | while read -r line; do
         continue
     fi
 
-    parsed=($(parse_client "$line"))
-    [[ $? != 0 ]] && continue
-    key="${parsed[0]}"
-    name="${parsed[1]}"
-    err="${parsed[2]}"
-    quant_client="${parsed[3]}"
-    role="${parsed[4]}"
+    parse_result=$(parse_client "$line")
+    if [[ $? != 0 ]]; then
+        continue
+    fi
+    
+    # Parse the newline-separated output correctly
+    readarray -t parsed_fields <<< "$parse_result"
+    key="${parsed_fields[0]}"
+    name="${parsed_fields[1]}"
+    err="${parsed_fields[2]}"
+    quant_client="${parsed_fields[3]}"
+    role="${parsed_fields[4]}"
 
     if [[ "$role" != "R" ]]; then
         continue

@@ -4,7 +4,7 @@ base_backoff=1
 check_interval=1
 
 # Minimum time in seconds between quantum increases
-min_increase_cooldown=5
+min_increase_cooldown=2
 
 log_level=1
 for arg in "$@"; do
@@ -111,11 +111,13 @@ find_pwtop_columns() {
 parse_client() {
     local line="$1"
     [[ "$line" =~ ^[[:space:]]*$ ]] && return 1
-    [[ "$line" =~ ^\ *[A-Z]\ +ID\ +(QUANT|QUANTUM) ]] && return 1
-    [[ "$line" =~ ^\ *[-]+ ]] && return 1
+    [[ "$line" =~ ^[[:space:]]*[A-Z][[:space:]]+ID[[:space:]]+(QUANT|QUANTUM) ]] && return 1
+    [[ "$line" =~ ^[[:space:]]*[-]+ ]] && return 1
     local role
     role=$(awk '{print $1}' <<< "$line")
     [[ -z "$role" ]] && return 1
+    # Skip lines that look like headers or separators
+    [[ "$role" =~ ^(S|ID|QUANT|QUANTUM|RATE|WAIT|BUSY|ERR|FORMAT|NAME)$ ]] && return 1
     local id quant err name
     
     # Check if required column indices are available
@@ -297,15 +299,14 @@ process_frame() {
     for gone_key in "${!prev_errs[@]}"; do
         if [[ -z "${curr_errs[$gone_key]+set}" ]]; then
             unset prev_errs[$gone_key]
+            log 3 "Removed tracking for vanished client: $gone_key"
         fi
     done
 
     # Clear for next frame
     clients_with_new_errs=()
-    curr_errs=()
-    client_pretty_names=()
-    client_quants=()
-    client_roles=()
+    # Note: Don't clear curr_errs immediately since we might process multiple times per collection cycle
+    # Instead, clear it when we start a new frame
 }
 
 header_found=0
@@ -314,28 +315,44 @@ frame_started=0
 last_frame_time=0
 # Maximum time to wait before processing accumulated frame data (seconds)
 max_frame_wait=1
+# Track number of lines processed in current frame to ensure regular processing
+lines_in_frame=0
+# Force frame processing after this many client lines even without header detection
+max_lines_per_frame=20
 
 pw-top -b | while read -r line; do
-    # Check if we should process frame due to timeout
     current_time=$(date +%s)
-    if (( frame_started && current_time - last_frame_time >= max_frame_wait && ${#curr_errs[@]} > 0 )); then
+    
+    # More aggressive frame processing: process on timeout OR if we have clients waiting
+    if (( frame_started && ((current_time - last_frame_time >= max_frame_wait && ${#curr_errs[@]} > 0) || lines_in_frame >= max_lines_per_frame) )); then
         elapsed_time=$((current_time - last_frame_time))
         client_count=${#curr_errs[@]}
-        log 3 "Processing frame due to timeout (${elapsed_time}s since last frame, ${client_count} clients)"
+        if (( lines_in_frame >= max_lines_per_frame )); then
+            log 3 "Processing frame after $lines_in_frame lines (${client_count} clients)"
+        else
+            log 3 "Processing frame due to timeout (${elapsed_time}s since last frame, ${client_count} clients)"
+        fi
         process_frame
         last_frame_time=$current_time
+        lines_in_frame=0
     fi
     
-    # Detect new frame by header line
-    if [[ "$line" =~ ID[[:space:]]+(QUANT|QUANTUM) ]]; then
-        if (( frame_started )); then
-            log 3 "Processing frame with ${#curr_errs[@]} clients"
+    # Header detection - look for actual pw-top headers
+    if [[ "$line" =~ ^[[:space:]]*S[[:space:]]+ID[[:space:]]+(QUANT|QUANTUM)[[:space:]]+.*ERR ]] || [[ "$line" =~ ^[[:space:]]*[A-Z][[:space:]]+ID[[:space:]]+(QUANT|QUANTUM)[[:space:]]+.*ERR ]]; then
+        if (( frame_started && ${#curr_errs[@]} > 0 )); then
+            log 3 "Processing frame with ${#curr_errs[@]} clients (header detected)"
             process_frame
         fi
         find_pwtop_columns "$line"
         pwtop_header="$line"
         frame_started=1
         last_frame_time=$current_time
+        lines_in_frame=0
+        # Clear frame data for new frame
+        curr_errs=()
+        client_pretty_names=()
+        client_quants=()
+        client_roles=()
         log 3 "New frame detected: $line"
         continue
     fi
@@ -344,6 +361,8 @@ pw-top -b | while read -r line; do
     if [[ $? != 0 ]]; then
         continue
     fi
+    
+    lines_in_frame=$((lines_in_frame + 1))
     
     # Parse the newline-separated output correctly
     readarray -t parsed_fields <<< "$parse_result"
@@ -361,6 +380,14 @@ pw-top -b | while read -r line; do
     client_pretty_names["$key"]="$name"
     client_quants["$key"]=$quant_client
     client_roles["$key"]=$role
+    
+    # Process frame immediately if we detect significant ERR increases
+    if [[ -n "${prev_errs[$key]}" ]] && (( err > prev_errs[$key] + 10 )); then
+        log 3 "Large ERR increase detected for $name: ${prev_errs[$key]} -> $err, processing frame immediately"
+        process_frame
+        last_frame_time=$current_time
+        lines_in_frame=0
+    fi
 done
 
 # process last frame if script is exiting

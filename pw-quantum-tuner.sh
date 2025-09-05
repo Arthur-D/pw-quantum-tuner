@@ -111,11 +111,13 @@ find_pwtop_columns() {
 parse_client() {
     local line="$1"
     [[ "$line" =~ ^[[:space:]]*$ ]] && return 1
-    [[ "$line" =~ ^\ *[A-Z]\ +ID\ +(QUANT|QUANTUM) ]] && return 1
-    [[ "$line" =~ ^\ *[-]+ ]] && return 1
+    [[ "$line" =~ ^[[:space:]]*[A-Z][[:space:]]+ID[[:space:]]+(QUANT|QUANTUM) ]] && return 1
+    [[ "$line" =~ ^[[:space:]]*[-]+ ]] && return 1
     local role
     role=$(awk '{print $1}' <<< "$line")
     [[ -z "$role" ]] && return 1
+    # Skip lines that look like headers or separators
+    [[ "$role" =~ ^(S|ID|QUANT|QUANTUM|RATE|WAIT|BUSY|ERR|FORMAT|NAME)$ ]] && return 1
     local id quant err name
     
     # Check if required column indices are available
@@ -335,8 +337,8 @@ pw-top -b | while read -r line; do
         lines_in_frame=0
     fi
     
-    # Improved header detection - catch more header patterns
-    if [[ "$line" =~ ^[[:space:]]*S[[:space:]]+ID[[:space:]]+(QUANT|QUANTUM) ]] || [[ "$line" =~ ID[[:space:]]+(QUANT|QUANTUM) ]] || [[ "$line" =~ ^[[:space:]]*[A-Z][[:space:]]+[0-9]+[[:space:]]+[0-9]+ ]]; then
+    # Header detection - look for actual pw-top headers
+    if [[ "$line" =~ ^[[:space:]]*S[[:space:]]+ID[[:space:]]+(QUANT|QUANTUM)[[:space:]]+.*ERR ]] || [[ "$line" =~ ^[[:space:]]*[A-Z][[:space:]]+ID[[:space:]]+(QUANT|QUANTUM)[[:space:]]+.*ERR ]]; then
         if (( frame_started && ${#curr_errs[@]} > 0 )); then
             log 3 "Processing frame with ${#curr_errs[@]} clients (header detected)"
             process_frame

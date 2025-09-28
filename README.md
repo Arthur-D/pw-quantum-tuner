@@ -51,13 +51,12 @@
 To run the tuner automatically as a user service, use the provided [pw-quantum-tuner.service](./pw-quantum-tuner.service) file.
 
 **Steps:**
-1. **Copy the service file:**  
-   Place `pw-quantum-tuner.service` in your user systemd directory:
+1. **Place the service file in your systemd user directory:**
    ```bash
    mkdir -p ~/.config/systemd/user
    cp pw-quantum-tuner.service ~/.config/systemd/user/
    ```
-2. **Edit the ExecStart path:**  
+2. **Edit the ExecStart path:**
    Open the service file and replace `/full/path/to/script/pw-quantum-tuner/pw-quantum-tuner.sh` with the actual path to your script.
    
 4. **Reload user systemd services and enable and start the service:**  
@@ -69,8 +68,9 @@ To run the tuner automatically as a user service, use the provided [pw-quantum-t
 
 ## Requirements
 
-- Bash (should work with most POSIX shells)
-- PipeWire, including `pw-top` and `pw-metadata` (should as far as I know be included by default with PipeWire in most distributions)
+- Bash (should work with most POSIX shells).
+- PipeWire, including `pw-top` and `pw-metadata` (should as far as I know be included by default with PipeWire in most distributions).
+- It does **not** require root and should be run at the user level, either directly or as a systemd user service.
 
 ---
 
@@ -78,16 +78,3 @@ To run the tuner automatically as a user service, use the provided [pw-quantum-t
 
 - The script will use PipeWire’s configured `min_quantum` and `max_quantum` if available, or fallback to defaults.
 - You can override quantum by setting PipeWire metadata (`clock.force-quantum`), or by passing options to the script.
-
----
-
-## How to monitor
-
-- Run with `--log-level 3` for detailed logs (including every parsed client and all state transitions).
-- Quantum changes and reasons (error surges, timeouts) are always logged at level 1.
----
-
-## Notes
-
-- The script requires PipeWire; it only updates PipeWire's quantum setting via `pw-metadata`.
-- It does **not** require root.

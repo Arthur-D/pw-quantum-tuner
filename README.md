@@ -35,6 +35,7 @@
 ## Usage
 ### Direct script execution
 ```bash
+chmod +x pw-quantum-tuner.sh
 ./pw-quantum-tuner.sh [--log-level N]
 ```
 - **Log Level 1 (default)**

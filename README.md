@@ -33,7 +33,7 @@
 ---
 
 ## Usage
-### Direct Script Execution
+### Direct script execution
 ```bash
 ./pw-quantum-tuner.sh [--log-level N]
 ```

@@ -33,24 +33,44 @@
 ---
 
 ## Usage
+### Direct Script Execution
 ```bash
 ./pw-quantum-tuner.sh [--log-level N]
 ```
 - **Log Level 1 (default)**
   - Shows normal logs: quantum changes, basic actions, startup messages, and errors.
   - You'll see messages when the quantum is increased or decreased and the reason (like new ERRs detected or backoff timer elapsed).
+    
 - **Log Level 2**
   - Shows everything from level 1.
   - Additionally logs detailed per-client error events, including which clients had ERR increases and their details.
   - Includes extra debug information such as client parsing, state transitions, calculations, column detection, and internal decisions.
+    
+### Running as a systemd user service
 
+To run the tuner automatically as a user service, use the provided [pw-quantum-tuner.service](./pw-quantum-tuner.service) file.
+
+**Steps:**
+1. **Copy the service file:**  
+   Place `pw-quantum-tuner.service` in your user systemd directory:
+   ```bash
+   mkdir -p ~/.config/systemd/user
+   cp pw-quantum-tuner.service ~/.config/systemd/user/
+   ```
+2. **Edit the ExecStart path:**  
+   Open the service file and replace `/full/path/to/script/pw-quantum-tuner/pw-quantum-tuner.sh` with the actual path to your script.
+   
+4. **Reload user systemd services and enable and start the service:**  
+   ```bash
+   systemctl --user daemon-reload
+   systemctl --user enable --now pw-quantum-tuner.service
+   ```
 ---
 
 ## Requirements
 
 - Bash (should work with most POSIX shells)
-- PipeWire and `pw-top`
-- `pw-metadata` (for reading/writing quantum settings)
+- PipeWire, including `pw-top` and `pw-metadata` (should as far as I know be included by default with PipeWire in most distributions)
 
 ---
 

@@ -20,7 +20,7 @@
 
 ---
 
-## How It Works
+## How it works
 
 - **Watches PipeWire clients in real time** using `pw-top`.
 - **Tracks all running clients** (role "R") and monitors their `ERR` counts (audio processing errors).
@@ -37,9 +37,14 @@
 ```bash
 ./pw-quantum-tuner.sh [--log-level N]
 ```
-- `--log-level 1` (default): Normal logs (quantum changes, basic actions)
-- `--log-level 2`: Also logs per-client error events
-- `--log-level 3`: Full debug (parsing, state, all calculations and internal decisions)
+- **Log Level 1 (default)**
+  - Shows normal logs: quantum changes, basic actions, startup messages, and errors.
+  - You'll see messages when the quantum is increased or decreased and the reason (like new ERRs detected or backoff timer elapsed).
+
+- **Log Level 2**
+  - Shows everything from level 1.
+  - Additionally logs detailed per-client error events, including which clients had ERR increases and their details.
+  - Includes extra debug information such as client parsing, state transitions, calculations, column detection, and internal decisions.
 
 ---
 
@@ -58,7 +63,7 @@
 
 ---
 
-## How to Monitor
+## How to monitor
 
 - Run with `--log-level 3` for detailed logs (including every parsed client and all state transitions).
 - Quantum changes and reasons (error surges, timeouts) are always logged at level 1.
@@ -66,5 +71,5 @@
 
 ## Notes
 
-- The script is safe to run alongside PipeWire; it only updates the quantum setting via `pw-metadata`.
+- The script requires PipeWire; it only updates PipeWire's quantum setting via `pw-metadata`.
 - It does **not** require root.

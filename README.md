@@ -33,14 +33,12 @@
 ---
 
 ## Usage
-
 ```bash
 ./pw-quantum-tuner.sh [--log-level N]
 ```
 - **Log Level 1 (default)**
   - Shows normal logs: quantum changes, basic actions, startup messages, and errors.
   - You'll see messages when the quantum is increased or decreased and the reason (like new ERRs detected or backoff timer elapsed).
-
 - **Log Level 2**
   - Shows everything from level 1.
   - Additionally logs detailed per-client error events, including which clients had ERR increases and their details.

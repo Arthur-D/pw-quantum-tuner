@@ -50,7 +50,6 @@ chmod +x pw-quantum-tuner.sh
 
 To run the tuner automatically as a user service, use the provided [pw-quantum-tuner.service](./pw-quantum-tuner.service) file.
 
-**Steps:**
 1. **Place the service file in your systemd user directory:**
    ```bash
    mkdir -p ~/.config/systemd/user
@@ -66,15 +65,15 @@ To run the tuner automatically as a user service, use the provided [pw-quantum-t
    ```
 ---
 
+## Configuration
+
+- The script will use PipeWire’s configured `min_quantum` and `max_quantum` if available, or fallback to defaults.
+- You can override quantum by setting PipeWire metadata (`clock.force-quantum`), or by passing options to the script.
+
+---
+
 ## Requirements
 
 - Bash (should work with most POSIX shells).
 - PipeWire, including `pw-top` and `pw-metadata` (should as far as I know be included by default with PipeWire in most distributions).
 - It does **not** require root and should be run at the user level, either directly or as a systemd user service.
-
----
-
-## Configuration
-
-- The script will use PipeWire’s configured `min_quantum` and `max_quantum` if available, or fallback to defaults.
-- You can override quantum by setting PipeWire metadata (`clock.force-quantum`), or by passing options to the script.

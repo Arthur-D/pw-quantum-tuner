@@ -1,6 +1,6 @@
 # PipeWire Quantum Tuner
 
-**pw-quantum-tuner.sh** is a dynamic quantum (buffer size) tuner for PipeWire, designed to automatically adjust the PipeWire server's quantum based on real-time audio client error statistics. Its goal is to optimize latency and reliability; starting with the lowest possible quantum for low-latency audio, and automatically increasing it when audio processing errors are detected.
+**pw-quantum-tuner.sh** is a dynamic quantum (buffer size) tuner for PipeWire, designed to automatically adjust the PipeWire server's quantum based on real-time audio client error statistics. Its goal is to optimize latency and reliability; starting with the lowest possible quantum for low-latency audio, and automatically increasing it when audio processing errors are detected. However, it's not meant for most users and explicitly goes against the lessons learned from PulseAudio, which had dynamic latency, and PipeWire does not. This script tries to add that feature back, for users who really want it.
 
 ---
 
@@ -24,7 +24,7 @@
 
 - **Watches PipeWire clients in real time** using `pw-top`.
 - **Tracks all running clients** (role "R") and monitors their `ERR` counts (audio processing errors).
-- **If any client’s ERR count increases** (i.e., new audio errors are detected for any client during a single `pw-top` frame), the script doubles the quantum (up to a maximum) and increases a backoff timer, giving the system more time before considering reducing the quantum again.
+- **If any client’s ERR count increases** (i.e., new audio errors are detected for any client during a single `pw-top` frame), the script doubles min-quantum (up to a maximum) and increases a backoff timer, giving the system more time before considering reducing the quantum again.
 - **If no new errors are detected for a period** (the backoff interval), the quantum is halved (down to the minimum), gradually seeking the lowest stable buffer size.
 - **Backoff intervals are dynamically adjusted**: Each time the quantum is increased, the waiting period before a possible decrease is also increased (and vice versa), to avoid oscillation and to adapt to the system’s needs.
 - **Clients that disappear have their error state tracking removed**.
@@ -68,7 +68,7 @@ To run the tuner automatically as a user service, use the provided [pw-quantum-t
 ## Configuration
 
 - The script will use PipeWire’s configured `min_quantum` and `max_quantum` if available, or fallback to defaults.
-- You can override quantum by setting PipeWire metadata (`clock.force-quantum`), or by passing options to the script.
+- You can override quantum by setting PipeWire metadata (`clock.min-quantum`), or by passing options to the script.
 
 ---
 

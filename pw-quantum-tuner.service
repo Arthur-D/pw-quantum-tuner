@@ -1,5 +1,5 @@
 [Unit]
-Description=PipeWire Quantum Auto-Tuner (adjusts clock.min-quantum)
+Description=PipeWire Quantum Auto-Tuner (User Service)
 After=pipewire.service pipewire.socket
 Requires=pipewire.service
 

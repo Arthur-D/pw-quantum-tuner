@@ -55,12 +55,13 @@ max_quantum=$(read_metadata_value clock.max-quantum)
 [[ -z "$min_quantum" || "$min_quantum" -le 0 ]] && min_quantum=128
 [[ -z "$max_quantum" || "$max_quantum" -le 0 ]] && max_quantum=8192
 
-force_quantum=$(read_metadata_value clock.force-quantum)
+# Read current min-quantum from PipeWire metadata (this is what we'll be adjusting)
+current_min_quantum=$(read_metadata_value clock.min-quantum)
 pwtop_quantum=$(get_pwtop_quantum)
 if [[ -n "$pwtop_quantum" && "$pwtop_quantum" -gt 0 ]]; then
     quantum=$pwtop_quantum
-elif [[ -n "$force_quantum" && "$force_quantum" -gt 0 ]]; then
-    quantum=$force_quantum
+elif [[ -n "$current_min_quantum" && "$current_min_quantum" -gt 0 ]]; then
+    quantum=$current_min_quantum
 else
     quantum=$min_quantum
 fi
@@ -233,8 +234,8 @@ process_frame() {
             if (( log_level >= 2 )); then
                 for line in "${deltas[@]}"; do log 2 "$line"; done
             fi
-            log 3 "Executing: pw-metadata -n settings 0 clock.force-quantum $next_quantum"
-            if /usr/bin/pw-metadata -n settings 0 clock.force-quantum "$next_quantum" >/dev/null 2>&1; then
+            log 3 "Executing: pw-metadata -n settings 0 clock.min-quantum $next_quantum"
+            if /usr/bin/pw-metadata -n settings 0 clock.min-quantum "$next_quantum" >/dev/null 2>&1; then
                 log 3 "pw-metadata command succeeded"
             else
                 log 1 "ERROR: pw-metadata command failed!"
@@ -277,8 +278,8 @@ process_frame() {
             (( next_backoff < 1 )) && next_backoff=1
             quantum_backoff[$next_quantum]=$next_backoff
             log 1 "↓ Decreasing quantum from $quantum to $next_quantum (next decrease in ${quantum_backoff[$next_quantum]} min)"
-            log 3 "Executing: pw-metadata -n settings 0 clock.force-quantum $next_quantum"
-            if /usr/bin/pw-metadata -n settings 0 clock.force-quantum "$next_quantum" >/dev/null 2>&1; then
+            log 3 "Executing: pw-metadata -n settings 0 clock.min-quantum $next_quantum"
+            if /usr/bin/pw-metadata -n settings 0 clock.min-quantum "$next_quantum" >/dev/null 2>&1; then
                 log 3 "pw-metadata command succeeded"
             else
                 log 1 "ERROR: pw-metadata command failed!"

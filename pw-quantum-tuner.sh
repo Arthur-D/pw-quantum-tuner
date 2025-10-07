@@ -80,6 +80,7 @@ if (( log_level >= 1 )); then
 fi
 
 declare -A pwtop_col_idx
+columns_logged=0
 
 find_pwtop_columns() {
     local header="$1"
@@ -96,8 +97,8 @@ find_pwtop_columns() {
         idx=$((idx+1))
     done
     
-    # Debug: log detected columns at startup
-    if (( log_level >= 2 )); then
+    # Debug: log detected columns only once at startup
+    if (( log_level >= 2 && columns_logged == 0 )); then
         log 2 "Column detection from header: $header"
         for col_name in id quant err name; do
             if [[ -n "${pwtop_col_idx[$col_name]}" ]]; then
@@ -106,6 +107,7 @@ find_pwtop_columns() {
                 log 2 "  $col_name -> NOT FOUND"
             fi
         done
+        columns_logged=1
     fi
 }
 

@@ -321,7 +321,7 @@ lines_in_frame=0
 # Force frame processing after this many client lines even without header detection
 max_lines_per_frame=20
 
-pw-top -b | while read -r line; do
+while read -r line; do
     current_time=$(date +%s)
     
     # More aggressive frame processing: process on timeout OR if we have clients waiting
@@ -389,7 +389,7 @@ pw-top -b | while read -r line; do
         last_frame_time=$current_time
         lines_in_frame=0
     fi
-done
+done < <(pw-top -b)
 
 # process last frame if script is exiting
 process_frame

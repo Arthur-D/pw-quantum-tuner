@@ -355,11 +355,11 @@ while read -r line; do
         frame_started=1
         last_frame_time=$current_time
         lines_in_frame=0
-        # Clear frame data for new frame
-        curr_errs=()
-        client_pretty_names=()
-        client_quants=()
-        client_roles=()
+        # Clear frame data for new frame (preserve associative array types)
+        for key in "${!curr_errs[@]}"; do unset curr_errs[$key]; done
+        for key in "${!client_pretty_names[@]}"; do unset client_pretty_names[$key]; done
+        for key in "${!client_quants[@]}"; do unset client_quants[$key]; done
+        for key in "${!client_roles[@]}"; do unset client_roles[$key]; done
         log 3 "New frame detected: $line"
         continue
     fi

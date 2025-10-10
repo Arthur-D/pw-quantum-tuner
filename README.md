@@ -23,7 +23,7 @@
 ## How it works
 
 - **Watches PipeWire clients in real time** using `pw-top`.
-- **Tracks all running clients** (role "R") and monitors their `ERR` counts (audio processing errors).
+- **Tracks running and input clients** (roles "R" and "I") and monitors their `ERR` counts (audio processing errors).
 - **If any client’s ERR count increases** (i.e., new audio errors are detected for any client during a single `pw-top` frame), the script doubles min-quantum (up to a maximum) and increases a backoff timer, giving the system more time before considering reducing the quantum again.
 - **If no new errors are detected for a period** (the backoff interval), the quantum is halved (down to the minimum), gradually seeking the lowest stable buffer size.
 - **Backoff intervals are dynamically adjusted**: Each time the quantum is increased, the waiting period before a possible decrease is also increased (and vice versa), to avoid oscillation and to adapt to the system’s needs.

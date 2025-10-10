@@ -56,14 +56,18 @@ max_quantum=$(read_metadata_value clock.max-quantum)
 [[ -z "$max_quantum" || "$max_quantum" -le 0 ]] && max_quantum=8192
 
 # Read current min-quantum from PipeWire metadata (this is what we'll be adjusting)
+# Use clock.min-quantum as the source of truth, not individual client quantums
 current_min_quantum=$(read_metadata_value clock.min-quantum)
-pwtop_quantum=$(get_pwtop_quantum)
-if [[ -n "$pwtop_quantum" && "$pwtop_quantum" -gt 0 ]]; then
-    quantum=$pwtop_quantum
-elif [[ -n "$current_min_quantum" && "$current_min_quantum" -gt 0 ]]; then
+if [[ -n "$current_min_quantum" && "$current_min_quantum" -gt 0 ]]; then
     quantum=$current_min_quantum
 else
-    quantum=$min_quantum
+    # Fallback to checking actual running clients if metadata not set
+    pwtop_quantum=$(get_pwtop_quantum)
+    if [[ -n "$pwtop_quantum" && "$pwtop_quantum" -gt 0 ]]; then
+        quantum=$pwtop_quantum
+    else
+        quantum=$min_quantum
+    fi
 fi
 last_set_quantum=$quantum
 
@@ -375,7 +379,8 @@ while read -r line; do
     quant_client="${parsed_fields[3]}"
     role="${parsed_fields[4]}"
 
-    if [[ "$role" != "R" ]]; then
+    # Track both Running (R) and Input (I) clients for error detection
+    if [[ "$role" != "R" && "$role" != "I" ]]; then
         continue
     fi
 

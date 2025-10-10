@@ -305,7 +305,7 @@ process_frame() {
     # Remove tracking info for vanished clients
     for gone_key in "${!prev_errs[@]}"; do
         if [[ -z "${curr_errs[$gone_key]+set}" ]]; then
-            unset prev_errs[$gone_key]
+            unset 'prev_errs[$gone_key]'
             log 3 "Removed tracking for vanished client: $gone_key"
         fi
     done
@@ -356,10 +356,10 @@ while read -r line; do
         last_frame_time=$current_time
         lines_in_frame=0
         # Clear frame data for new frame (preserve associative array types)
-        for key in "${!curr_errs[@]}"; do unset curr_errs[$key]; done
-        for key in "${!client_pretty_names[@]}"; do unset client_pretty_names[$key]; done
-        for key in "${!client_quants[@]}"; do unset client_quants[$key]; done
-        for key in "${!client_roles[@]}"; do unset client_roles[$key]; done
+        for key in "${!curr_errs[@]}"; do unset 'curr_errs[$key]'; done
+        for key in "${!client_pretty_names[@]}"; do unset 'client_pretty_names[$key]'; done
+        for key in "${!client_quants[@]}"; do unset 'client_quants[$key]'; done
+        for key in "${!client_roles[@]}"; do unset 'client_roles[$key]'; done
         log 3 "New frame detected: $line"
         continue
     fi

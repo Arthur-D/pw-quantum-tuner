@@ -163,12 +163,12 @@ process_frame() {
     local quantum_increased=0
     local increased_clients=()
 
-    # Initialize prev_errs for new clients
+    # Initialize prev_errs for new clients to 0 so accumulated errors are detected
     for key in "${!curr_errs[@]}"; do
         local curr_val=${curr_errs[$key]:-0}
         if [[ -z "${prev_errs[$key]+set}" ]]; then
-            prev_errs[$key]=$curr_val
-            log 3 "Initializing prev_errs for new client $key (${client_pretty_names[$key]:-unknown}): $curr_val"
+            prev_errs[$key]=0
+            log 3 "Initializing prev_errs for new client $key (${client_pretty_names[$key]:-unknown}) to 0 (current ERR: $curr_val)"
         fi
     done
 

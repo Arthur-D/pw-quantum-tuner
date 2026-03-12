@@ -45,7 +45,7 @@ read_metadata_value() {
 }
 
 get_pwtop_quantum() {
-    pw-top -bn 2 2>/dev/null | awk '$1 == "R" && $3 ~ /^[0-9]+$/ && $3 > 0 {print $3; exit}'
+    pw-top -bn 2 2>/dev/null | awk '($1 == "R" || $1 == "I") && $3 ~ /^[0-9]+$/ && $3 > 0 {print $3; exit}'
 }
 
 min_quantum=$(read_metadata_value clock.min-quantum)
@@ -379,8 +379,11 @@ while read -r line; do
     quant_client="${parsed_fields[3]}"
     role="${parsed_fields[4]}"
 
-    # Track both Running (R) and Input (I) clients for error detection
-    if [[ "$role" != "R" && "$role" != "I" ]]; then
+    # Track all active clients for error detection (Running, Idle, and any direction-based states).
+    # S (Suspended) clients and header lines are already filtered out by parse_client.
+    # A strict whitelist here would miss output-direction devices if pw-top labels them
+    # differently from input-direction devices (e.g. "O" vs "I" in some PipeWire versions).
+    if [[ -z "$role" ]]; then
         continue
     fi
 

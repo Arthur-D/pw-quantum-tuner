@@ -185,6 +185,11 @@ clients_with_new_errs=()
 seen_this_frame=()
 
 process_frame() {
+    # full_frame=1 means all clients for this pw-top batch have been collected;
+    # only do the "vanished clients" cleanup in this case so that clients which
+    # appear later in a batch (beyond max_lines_per_frame) are not evicted from
+    # prev_errs before they have been processed.
+    local full_frame=${1:-0}
     local quantum_increased=0
     local increased_clients=()
 
@@ -327,13 +332,17 @@ process_frame() {
         prev_errs[$key]=${curr_errs[$key]}
     done
 
-    # Remove tracking info for vanished clients
-    for gone_key in "${!prev_errs[@]}"; do
-        if [[ -z "${curr_errs[$gone_key]+set}" ]]; then
-            unset 'prev_errs[$gone_key]'
-            log 3 "Removed tracking for vanished client: $gone_key"
-        fi
-    done
+    # Remove tracking info for vanished clients — only after a complete frame so
+    # that clients appearing after the mid-frame cut-off are not evicted before
+    # their data has been read into curr_errs.
+    if (( full_frame )); then
+        for gone_key in "${!prev_errs[@]}"; do
+            if [[ -z "${curr_errs[$gone_key]+set}" ]]; then
+                unset 'prev_errs[$gone_key]'
+                log 3 "Removed tracking for vanished client: $gone_key"
+            fi
+        done
+    fi
 
     # Clear for next frame
     clients_with_new_errs=()
@@ -373,7 +382,7 @@ while read -r line; do
     if [[ "$line" =~ ^[[:space:]]*S[[:space:]]+ID[[:space:]]+(QUANT|QUANTUM)[[:space:]]+.*ERR ]] || [[ "$line" =~ ^[[:space:]]*[A-Z][[:space:]]+ID[[:space:]]+(QUANT|QUANTUM)[[:space:]]+.*ERR ]]; then
         if (( frame_started && ${#curr_errs[@]} > 0 )); then
             log 3 "Processing frame with ${#curr_errs[@]} clients (header detected)"
-            process_frame
+            process_frame 1
         fi
         find_pwtop_columns "$line"
         pwtop_header="$line"
@@ -427,4 +436,4 @@ while read -r line; do
 done < <(pw-top -b)
 
 # process last frame if script is exiting
-process_frame
+process_frame 1

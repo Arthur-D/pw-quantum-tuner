@@ -45,7 +45,7 @@ read_metadata_value() {
 }
 
 get_pwtop_quantum() {
-    pw-top -bn 2 2>/dev/null | awk '($1 == "R" || $1 == "I") && $3 ~ /^[0-9]+$/ && $3 > 0 {print $3; exit}'
+    pw-top -bn 2 2>/dev/null | awk '$1 == "R" && $3 ~ /^[0-9]+$/ && $3 > 0 { if ($3 > max) max=$3 } END { if (max > 0) print max }'
 }
 
 min_quantum=$(read_metadata_value clock.min-quantum)
@@ -84,6 +84,7 @@ if (( log_level >= 1 )); then
 fi
 
 declare -A pwtop_col_idx
+pwtop_name_char_offset=0
 columns_logged=0
 
 find_pwtop_columns() {
@@ -100,7 +101,24 @@ find_pwtop_columns() {
         esac
         idx=$((idx+1))
     done
-    
+
+    # Find the character offset of the NAME column header so we can slice names
+    # out of data rows by position instead of by word count.  This is necessary
+    # because the FORMAT field expands to multiple space-separated tokens in data
+    # rows (e.g. "S32LE 2 48000") while it occupies only one word in the header,
+    # causing word-count-based extraction to land on the wrong field.
+    # Match "NAME" only as a standalone word (surrounded by whitespace or line boundaries)
+    # to avoid false matches against hypothetical column names like "FILENAME".
+    pwtop_name_char_offset=$(awk 'match($0, /(^|[[:space:]])NAME([[:space:]]|$)/) {
+        pos = RSTART
+        if (substr($0, pos, 1) ~ /[[:space:]]/) pos++
+        print pos
+    }' <<< "$header")
+    if [[ -z "$pwtop_name_char_offset" ]] || (( pwtop_name_char_offset == 0 )); then
+        pwtop_name_char_offset=0
+        log 1 "Warning: NAME column not found in pw-top header, name extraction may be inaccurate"
+    fi
+
     # Debug: log detected columns only once at startup
     if (( log_level >= 2 && columns_logged == 0 )); then
         log 2 "Column detection from header: $header"
@@ -111,6 +129,7 @@ find_pwtop_columns() {
                 log 2 "  $col_name -> NOT FOUND"
             fi
         done
+        log 2 "  name char offset -> $pwtop_name_char_offset"
         columns_logged=1
     fi
 }
@@ -136,7 +155,13 @@ parse_client() {
     id=$(awk -v idx="${pwtop_col_idx["id"]}" '{print $idx}' <<< "$line")
     quant=$(awk -v idx="${pwtop_col_idx["quant"]}" '{print $idx}' <<< "$line")
     err=$(awk -v idx="${pwtop_col_idx["err"]}" '{print $idx}' <<< "$line")
-    name=$(awk -v idx="${pwtop_col_idx["name"]}" '{for(i=idx;i<=NF;++i) {printf "%s ", $i}; print ""}' <<< "$line" | sed 's/ *$//')
+    # Use character-offset extraction for NAME to correctly skip the multi-token
+    # FORMAT field (e.g. "S32LE 2 48000") that word-counting cannot handle.
+    if (( pwtop_name_char_offset > 0 )); then
+        name=$(cut -c"${pwtop_name_char_offset}"- <<< "$line" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+    else
+        name=$(awk -v idx="${pwtop_col_idx["name"]}" '{for(i=idx;i<=NF;++i) {printf "%s ", $i}; print ""}' <<< "$line" | sed 's/ *$//')
+    fi
     
     [[ -z "$id" || -z "$quant" || -z "$err" ]] && {
         log 3 "Skipping client line - empty required fields (id:'$id', quant:'$quant', err:'$err')"
@@ -379,11 +404,11 @@ while read -r line; do
     quant_client="${parsed_fields[3]}"
     role="${parsed_fields[4]}"
 
-    # Track all active clients for error detection (Running, Idle, and any direction-based states).
-    # S (Suspended) clients and header lines are already filtered out by parse_client.
-    # A strict whitelist here would miss output-direction devices if pw-top labels them
-    # differently from input-direction devices (e.g. "O" vs "I" in some PipeWire versions).
-    if [[ -z "$role" ]]; then
+    # Only track Running (R) clients for error detection.
+    # Idle (I) clients are not actively processing audio; their accumulated error
+    # counts can trigger spurious quantum increases for the wrong device when the
+    # user has switched their active output.
+    if [[ "$role" != "R" ]]; then
         continue
     fi
 

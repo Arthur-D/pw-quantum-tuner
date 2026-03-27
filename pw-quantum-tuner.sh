@@ -113,8 +113,9 @@ find_pwtop_columns() {
         pos = RSTART
         if (substr($0, pos, 1) ~ /[[:space:]]/) pos++
         print pos
+        exit
     }' <<< "$header")
-    if [[ -z "$pwtop_name_char_offset" ]] || (( pwtop_name_char_offset == 0 )); then
+    if [[ ! "$pwtop_name_char_offset" =~ ^[0-9]+$ ]] || (( pwtop_name_char_offset == 0 )); then
         pwtop_name_char_offset=0
         log 1 "Warning: NAME column not found in pw-top header, name extraction may be inaccurate"
     fi

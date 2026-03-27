@@ -167,6 +167,13 @@ parse_client() {
         log 3 "Skipping client line - empty required fields (id:'$id', quant:'$quant', err:'$err')"
         return 1
     }
+    # Validate that id and err are non-negative integers before any arithmetic use.
+    # Non-integer values (e.g. decimals from a mis-mapped WAIT/BUSY column, or
+    # unexpected pw-top output) would cause an arithmetic syntax error later.
+    if [[ ! "$id" =~ ^[0-9]+$ || ! "$err" =~ ^[0-9]+$ ]]; then
+        log 3 "Skipping client line - non-integer fields (id:'$id', err:'$err')"
+        return 1
+    fi
     key="$id"
     printf "%s\n%s\n%s\n%s\n%s\n" "$key" "$name" "$err" "$quant" "$role"
     return 0

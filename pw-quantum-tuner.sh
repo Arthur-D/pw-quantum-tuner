@@ -49,11 +49,22 @@ get_pwtop_quantum() {
 }
 
 min_quantum=$(read_metadata_value clock.min-quantum)
-max_quantum=$(read_metadata_value clock.max-quantum)
 [[ -z "$min_quantum" ]] && min_quantum=$(get_pipewire_conf_value "default.clock.min-quantum")
-[[ -z "$max_quantum" ]] && max_quantum=$(get_pipewire_conf_value "default.clock.max-quantum")
 [[ -z "$min_quantum" || "$min_quantum" -le 0 ]] && min_quantum=128
+
+# clock.max-quantum from metadata is intentionally NOT used here.
+# clock.force-quantum (which this script uses to adjust quantum) bypasses PipeWire's
+# min/max quantum negotiation entirely, so the metadata clock.max-quantum value does
+# not constrain what clock.force-quantum can be set to.  On some distributions
+# (e.g. Bazzite) clock.max-quantum is set equal to clock.min-quantum in the PipeWire
+# settings metadata, which would make max_quantum == min_quantum == the starting
+# quantum, permanently preventing any increase.  Read only from the config file so
+# that the upper bound reflects a real hardware/user limit rather than a stale or
+# distro-imposed metadata value.
+max_quantum=$(get_pipewire_conf_value "default.clock.max-quantum")
 [[ -z "$max_quantum" || "$max_quantum" -le 0 ]] && max_quantum=8192
+# Ensure there is always headroom above min_quantum to allow quantum increases.
+(( max_quantum <= min_quantum )) && max_quantum=$(( min_quantum * 8 ))
 
 # Read current force-quantum from PipeWire metadata (this is what we'll be adjusting).
 # Prefer clock.force-quantum because it overrides the quantum for all nodes including

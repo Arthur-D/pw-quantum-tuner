@@ -67,8 +67,9 @@ To run the tuner automatically as a user service, use the provided [pw-quantum-t
 
 ## Configuration
 
-- The script will use PipeWire’s configured `min_quantum` and `max_quantum` if available, or fallback to defaults.
-- You can override quantum by setting PipeWire metadata (`clock.force-quantum`), or by passing options to the script.
+- **Minimum quantum (`min_quantum`)**: read from the PipeWire settings metadata key `clock.min-quantum`, then from `default.clock.min-quantum` in `pipewire.conf`, falling back to `128`.  This is the lowest quantum the tuner will target when the system is stable.
+- **Maximum quantum (`max_quantum`)**: read **only** from `default.clock.max-quantum` in `pipewire.conf`, falling back to `8192`.  The metadata key `clock.max-quantum` is intentionally ignored because the tuner adjusts quantum via `clock.force-quantum`, which bypasses PipeWire's min/max quantum negotiation and is therefore not constrained by `clock.max-quantum`.  On some distributions (e.g. Bazzite) the metadata `clock.max-quantum` is set equal to `clock.min-quantum`, which would prevent any quantum increase if it were used.
+- If the resolved `max_quantum` is not greater than `min_quantum`, the script automatically sets `max_quantum` to `min_quantum × 8` to ensure there is always headroom for increases.
 
 ---
 

@@ -31,61 +31,53 @@ log() {
 get_pipewire_conf_value() {
     local key="$1"
     local val=""
-    for conf in /etc/pipewire/pipewire.conf ~/.config/pipewire/pipewire.conf; do
-        if [[ -f "$conf" ]]; then
-            v=$(grep -E "^\s*${key}\s*=" "$conf" | tail -n1 | sed -E "s/^\s*${key}\s*=\s*([0-9]+).*/\1/")
-            [[ -n "$v" ]] && val="$v"
-        fi
+    # PipeWire loads config from these locations in priority order (last wins):
+    # /usr/share/pipewire, /etc/pipewire, ~/.config/pipewire, each with optional .d/ drop-ins.
+    local conf_dirs=(
+        /usr/share/pipewire
+        /etc/pipewire
+        "$HOME/.config/pipewire"
+    )
+    local saved_nullglob
+    saved_nullglob=$(shopt -p nullglob)
+    shopt -s nullglob
+    for dir in "${conf_dirs[@]}"; do
+        for conf in "$dir/pipewire.conf" "$dir/pipewire.conf.d"/*.conf; do
+            if [[ -f "$conf" ]]; then
+                v=$(grep -E "^\s*${key}\s*=" "$conf" | tail -n1 | sed -E "s/^\s*${key}\s*=\s*([0-9]+).*/\1/")
+                [[ -n "$v" ]] && val="$v"
+            fi
+        done
     done
+    eval "$saved_nullglob"
     echo "$val"
 }
 
-read_metadata_value() {
-    /usr/bin/pw-metadata -n settings | grep "key:'$1'" | head -n1 | sed -n "s/.*value:'\([0-9]\+\)'.*/\1/p"
-}
-
-get_pwtop_quantum() {
-    pw-top -bn 2 2>/dev/null | awk '$1 == "R" && $3 ~ /^[0-9]+$/ && $3 > 0 { if ($3 > max) max=$3 } END { if (max > 0) print max }'
-}
-
-min_quantum=$(read_metadata_value clock.min-quantum)
-[[ -z "$min_quantum" ]] && min_quantum=$(get_pipewire_conf_value "default.clock.min-quantum")
+# Read min/max quantum exclusively from the pipewire.conf file, never from PipeWire
+# settings metadata.  The metadata values for clock.min-quantum and clock.max-quantum
+# can be stale: previous script runs (or older versions of this script that used
+# clock.min-quantum for quantum increases) may have written high values there.
+# Reading stale metadata would make min_quantum == max_quantum == some old high value
+# (e.g. 4096), trapping the tuner with no room to increase quantum.
+min_quantum=$(get_pipewire_conf_value "default.clock.min-quantum")
 [[ -z "$min_quantum" || "$min_quantum" -le 0 ]] && min_quantum=128
-
-# clock.max-quantum from metadata is intentionally NOT used here.
-# clock.force-quantum (which this script uses to adjust quantum) bypasses PipeWire's
-# min/max quantum negotiation entirely, so the metadata clock.max-quantum value does
-# not constrain what clock.force-quantum can be set to.  On some distributions
-# (e.g. Bazzite) clock.max-quantum is set equal to clock.min-quantum in the PipeWire
-# settings metadata, which would make max_quantum == min_quantum == the starting
-# quantum, permanently preventing any increase.  Read only from the config file so
-# that the upper bound reflects a real hardware/user limit rather than a stale or
-# distro-imposed metadata value.
 max_quantum=$(get_pipewire_conf_value "default.clock.max-quantum")
 [[ -z "$max_quantum" || "$max_quantum" -le 0 ]] && max_quantum=8192
 # Ensure there is always headroom above min_quantum to allow quantum increases.
 (( max_quantum <= min_quantum )) && max_quantum=$(( min_quantum * 8 ))
 
-# Read current force-quantum from PipeWire metadata (this is what we'll be adjusting).
-# Prefer clock.force-quantum because it overrides the quantum for all nodes including
-# Bluetooth/ALSA driver nodes that otherwise ignore clock.min-quantum.
-current_force_quantum=$(read_metadata_value clock.force-quantum)
-if [[ -n "$current_force_quantum" && "$current_force_quantum" -gt 0 ]]; then
-    quantum=$current_force_quantum
-else
-    current_min_quantum=$(read_metadata_value clock.min-quantum)
-    if [[ -n "$current_min_quantum" && "$current_min_quantum" -gt 0 ]]; then
-        quantum=$current_min_quantum
-    else
-        # Fallback to checking actual running clients if metadata not set
-        pwtop_quantum=$(get_pwtop_quantum)
-        if [[ -n "$pwtop_quantum" && "$pwtop_quantum" -gt 0 ]]; then
-            quantum=$pwtop_quantum
-        else
-            quantum=$min_quantum
-        fi
-    fi
-fi
+# Always start at min_quantum and clear any stale forced-quantum from previous runs.
+# Resuming from a stale clock.force-quantum value is dangerous: if a previous run left
+# quantum at the maximum, the tuner starts with no room to increase and cannot react to
+# new errors.  Starting fresh at min_quantum is safe because the error-detection loop
+# will ramp up quickly if the system needs a higher quantum.
+quantum=$min_quantum
+/usr/bin/pw-metadata -n settings 0 clock.force-quantum 0 >/dev/null 2>&1 || true
+# Write the config-derived min_quantum back to metadata so that the PipeWire graph
+# uses this value as a floor.  This also overwrites any stale value written by older
+# versions of this script that used clock.min-quantum (instead of clock.force-quantum)
+# to increase quantum.
+/usr/bin/pw-metadata -n settings 0 clock.min-quantum "$min_quantum" >/dev/null 2>&1 || true
 last_set_quantum=$quantum
 
 declare -A prev_errs curr_errs client_pretty_names client_quants client_roles

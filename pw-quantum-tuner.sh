@@ -332,9 +332,14 @@ process_frame() {
             if (( next_quantum <= min_quantum )); then
                 # Back at minimum: release the forced quantum so every device can
                 # revert to its natural quantum, then re-assert the min-quantum floor.
-                /usr/bin/pw-metadata -n settings 0 clock.force-quantum 0 >/dev/null 2>&1
-                /usr/bin/pw-metadata -n settings 0 clock.min-quantum "$min_quantum" >/dev/null 2>&1
-                log 3 "pw-metadata clock.force-quantum released (back at minimum)"
+                if /usr/bin/pw-metadata -n settings 0 clock.force-quantum 0 >/dev/null 2>&1; then
+                    log 3 "pw-metadata clock.force-quantum released (back at minimum)"
+                else
+                    log 1 "ERROR: pw-metadata clock.force-quantum 0 command failed!"
+                fi
+                if ! /usr/bin/pw-metadata -n settings 0 clock.min-quantum "$min_quantum" >/dev/null 2>&1; then
+                    log 1 "ERROR: pw-metadata clock.min-quantum command failed!"
+                fi
             else
                 if /usr/bin/pw-metadata -n settings 0 clock.force-quantum "$next_quantum" >/dev/null 2>&1; then
                     log 3 "pw-metadata command succeeded"

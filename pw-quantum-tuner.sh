@@ -55,18 +55,24 @@ max_quantum=$(read_metadata_value clock.max-quantum)
 [[ -z "$min_quantum" || "$min_quantum" -le 0 ]] && min_quantum=128
 [[ -z "$max_quantum" || "$max_quantum" -le 0 ]] && max_quantum=8192
 
-# Read current min-quantum from PipeWire metadata (this is what we'll be adjusting)
-# Use clock.min-quantum as the source of truth, not individual client quantums
-current_min_quantum=$(read_metadata_value clock.min-quantum)
-if [[ -n "$current_min_quantum" && "$current_min_quantum" -gt 0 ]]; then
-    quantum=$current_min_quantum
+# Read current force-quantum from PipeWire metadata (this is what we'll be adjusting).
+# Prefer clock.force-quantum because it overrides the quantum for all nodes including
+# Bluetooth/ALSA driver nodes that otherwise ignore clock.min-quantum.
+current_force_quantum=$(read_metadata_value clock.force-quantum)
+if [[ -n "$current_force_quantum" && "$current_force_quantum" -gt 0 ]]; then
+    quantum=$current_force_quantum
 else
-    # Fallback to checking actual running clients if metadata not set
-    pwtop_quantum=$(get_pwtop_quantum)
-    if [[ -n "$pwtop_quantum" && "$pwtop_quantum" -gt 0 ]]; then
-        quantum=$pwtop_quantum
+    current_min_quantum=$(read_metadata_value clock.min-quantum)
+    if [[ -n "$current_min_quantum" && "$current_min_quantum" -gt 0 ]]; then
+        quantum=$current_min_quantum
     else
-        quantum=$min_quantum
+        # Fallback to checking actual running clients if metadata not set
+        pwtop_quantum=$(get_pwtop_quantum)
+        if [[ -n "$pwtop_quantum" && "$pwtop_quantum" -gt 0 ]]; then
+            quantum=$pwtop_quantum
+        else
+            quantum=$min_quantum
+        fi
     fi
 fi
 last_set_quantum=$quantum
@@ -278,8 +284,8 @@ process_frame() {
             if (( log_level >= 2 )); then
                 for line in "${deltas[@]}"; do log 2 "$line"; done
             fi
-            log 3 "Executing: pw-metadata -n settings 0 clock.min-quantum $next_quantum"
-            if /usr/bin/pw-metadata -n settings 0 clock.min-quantum "$next_quantum" >/dev/null 2>&1; then
+            log 3 "Executing: pw-metadata -n settings 0 clock.force-quantum $next_quantum"
+            if /usr/bin/pw-metadata -n settings 0 clock.force-quantum "$next_quantum" >/dev/null 2>&1; then
                 log 3 "pw-metadata command succeeded"
             else
                 log 1 "ERROR: pw-metadata command failed!"
@@ -322,11 +328,24 @@ process_frame() {
             (( next_backoff < 1 )) && next_backoff=1
             quantum_backoff[$next_quantum]=$next_backoff
             log 1 "↓ Decreasing quantum from $quantum to $next_quantum (next decrease in ${quantum_backoff[$next_quantum]} min)"
-            log 3 "Executing: pw-metadata -n settings 0 clock.min-quantum $next_quantum"
-            if /usr/bin/pw-metadata -n settings 0 clock.min-quantum "$next_quantum" >/dev/null 2>&1; then
-                log 3 "pw-metadata command succeeded"
+            log 3 "Executing: pw-metadata -n settings 0 clock.force-quantum $next_quantum"
+            if (( next_quantum <= min_quantum )); then
+                # Back at minimum: release the forced quantum so every device can
+                # revert to its natural quantum, then re-assert the min-quantum floor.
+                if /usr/bin/pw-metadata -n settings 0 clock.force-quantum 0 >/dev/null 2>&1; then
+                    log 3 "pw-metadata clock.force-quantum released (back at minimum)"
+                else
+                    log 1 "ERROR: pw-metadata clock.force-quantum 0 command failed!"
+                fi
+                if ! /usr/bin/pw-metadata -n settings 0 clock.min-quantum "$min_quantum" >/dev/null 2>&1; then
+                    log 1 "ERROR: pw-metadata clock.min-quantum command failed!"
+                fi
             else
-                log 1 "ERROR: pw-metadata command failed!"
+                if /usr/bin/pw-metadata -n settings 0 clock.force-quantum "$next_quantum" >/dev/null 2>&1; then
+                    log 3 "pw-metadata command succeeded"
+                else
+                    log 1 "ERROR: pw-metadata command failed!"
+                fi
             fi
             last_set_quantum=$next_quantum
             quantum=$next_quantum

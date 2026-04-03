@@ -68,7 +68,7 @@ To run the tuner automatically as a user service, use the provided [pw-quantum-t
 ## Configuration
 
 - The script will use PipeWire’s configured `min_quantum` and `max_quantum` if available, or fallback to defaults.
-- You can override quantum by setting PipeWire metadata (`clock.min-quantum`), or by passing options to the script.
+- You can override quantum by setting PipeWire metadata (`clock.force-quantum`), or by passing options to the script.
 
 ---
 

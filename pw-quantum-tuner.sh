@@ -84,8 +84,7 @@ declare -A prev_errs curr_errs client_pretty_names client_quants client_roles
 declare -A quantum_backoff
 default_backoff=1
 
-last_decrease_or_increase_time=0
-last_err_increase_time=0
+last_stability_event_time=$(date +%s)
 last_increase_time=0
 
 if (( log_level >= 1 )); then
@@ -234,6 +233,11 @@ process_frame() {
     # Only allow quantum increase if cooldown has elapsed
     now=$(date +%s)
     seconds_since_increase=$(( now - last_increase_time ))
+    if (( ${#clients_with_new_errs[@]} > 0 )); then
+        # Stability must be uninterrupted: even errors that occur during the
+        # increase cooldown or at max quantum restart the decrease timer.
+        last_stability_event_time=$now
+    fi
 
     # Debug logging for quantum increase decision
     if (( ${#clients_with_new_errs[@]} > 0 )); then
@@ -263,14 +267,15 @@ process_frame() {
         next_quantum=$((quantum * 2))
         next_quantum=$(clamp "$next_quantum" "$min_quantum" "$max_quantum")
         if (( next_quantum > quantum )); then
-            # Backoff handling
             if [[ -z "${quantum_backoff[$quantum]+set}" ]]; then
                 quantum_backoff[$quantum]=$default_backoff
             fi
             if [[ -z "${quantum_backoff[$next_quantum]+set}" ]]; then
-                quantum_backoff[$next_quantum]=${quantum_backoff[$quantum]}
+                next_backoff=${quantum_backoff[$quantum]}
+            else
+                next_backoff=${quantum_backoff[$next_quantum]}
             fi
-            quantum_backoff[$next_quantum]=$(( quantum_backoff[$next_quantum] * 2 ))
+            next_backoff=$(( next_backoff * 2 ))
             # Log
             deltas=()
             for key in "${increased_clients[@]}"; do
@@ -282,22 +287,22 @@ process_frame() {
             for key in "${increased_clients[@]}"; do
                 total_delta=$((total_delta + curr_errs[$key] - prev_errs[$key]))
             done
-            msg="↑ Increasing quantum from $quantum to $next_quantum due to $total_delta new ERRs (next decrease in ${quantum_backoff[$next_quantum]} min)"
-            log 1 "$msg"
-            if (( log_level >= 2 )); then
-                for line in "${deltas[@]}"; do log 2 "$line"; done
-            fi
             log 3 "Executing: pw-metadata -n settings 0 clock.force-quantum $next_quantum"
             if /usr/bin/pw-metadata -n settings 0 clock.force-quantum "$next_quantum" >/dev/null 2>&1; then
                 log 3 "pw-metadata command succeeded"
+                quantum_backoff[$next_quantum]=$next_backoff
+                msg="↑ Increasing quantum from $quantum to $next_quantum due to $total_delta new ERRs (next decrease in ${next_backoff} min)"
+                log 1 "$msg"
+                if (( log_level >= 2 )); then
+                    for line in "${deltas[@]}"; do log 2 "$line"; done
+                fi
+                last_set_quantum=$next_quantum
+                quantum=$next_quantum
+                last_stability_event_time=$now
+                last_increase_time=$now
             else
                 log 1 "ERROR: pw-metadata command failed!"
             fi
-            last_set_quantum=$next_quantum
-            quantum=$next_quantum
-            last_decrease_or_increase_time=$now
-            last_err_increase_time=$now
-            last_increase_time=$now
         else
             log 2 "Quantum increase blocked: already at maximum (current=$quantum, max=$max_quantum)"
         fi
@@ -308,16 +313,8 @@ process_frame() {
         quantum_backoff[$quantum]=$default_backoff
     fi
     current_backoff=${quantum_backoff[$quantum]}
-    seconds_since_for_decrease=$(( now - last_decrease_or_increase_time ))
-    log 3 "Decrease evaluation: quantum=$quantum, backoff=${current_backoff}min, seconds_since_change=$seconds_since_for_decrease"
-    loadavg=$(awk '{print $1}' /proc/loadavg)
-    if (( current_backoff > 1 )) && awk "BEGIN {exit !($loadavg < 1.0)}"; then
-        old_backoff=$current_backoff
-        current_backoff=$((old_backoff / 2))
-        (( current_backoff < 1 )) && current_backoff=1
-        quantum_backoff[$quantum]=$current_backoff
-        log 1 "↳ System load is low ($loadavg), halving decrease backoff: $old_backoff → $current_backoff min"
-    fi
+    seconds_since_for_decrease=$(( now - last_stability_event_time ))
+    log 3 "Decrease evaluation: quantum=$quantum, backoff=${current_backoff}min, stable_seconds=$seconds_since_for_decrease"
     if (( quantum > min_quantum )); then
         if (( seconds_since_for_decrease >= current_backoff * 60 )); then
             next_quantum=$((quantum / 2))
@@ -329,14 +326,14 @@ process_frame() {
                 next_backoff=$(( quantum_backoff[$next_quantum] / 2 ))
             fi
             (( next_backoff < 1 )) && next_backoff=1
-            quantum_backoff[$next_quantum]=$next_backoff
-            log 1 "↓ Decreasing quantum from $quantum to $next_quantum (next decrease in ${quantum_backoff[$next_quantum]} min)"
             log 3 "Executing: pw-metadata -n settings 0 clock.force-quantum $next_quantum"
+            quantum_change_succeeded=0
             if (( next_quantum <= min_quantum )); then
                 # Back at minimum: release the forced quantum so every device can
                 # revert to its natural quantum, then re-assert the min-quantum floor.
                 if /usr/bin/pw-metadata -n settings 0 clock.force-quantum 0 >/dev/null 2>&1; then
                     log 3 "pw-metadata clock.force-quantum released (back at minimum)"
+                    quantum_change_succeeded=1
                 else
                     log 1 "ERROR: pw-metadata clock.force-quantum 0 command failed!"
                 fi
@@ -346,14 +343,19 @@ process_frame() {
             else
                 if /usr/bin/pw-metadata -n settings 0 clock.force-quantum "$next_quantum" >/dev/null 2>&1; then
                     log 3 "pw-metadata command succeeded"
+                    quantum_change_succeeded=1
                 else
                     log 1 "ERROR: pw-metadata command failed!"
                 fi
             fi
-            last_set_quantum=$next_quantum
-            quantum=$next_quantum
-            last_decrease_or_increase_time=$now
-            # Note: Keep last_increase_time unchanged to maintain increase cooldown
+            if (( quantum_change_succeeded )); then
+                quantum_backoff[$next_quantum]=$next_backoff
+                log 1 "↓ Decreasing quantum from $quantum to $next_quantum (next decrease in ${next_backoff} min)"
+                last_set_quantum=$next_quantum
+                quantum=$next_quantum
+                last_stability_event_time=$now
+                # Keep last_increase_time unchanged to maintain increase cooldown.
+            fi
         fi
     fi
 

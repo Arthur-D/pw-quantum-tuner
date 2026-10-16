@@ -31,6 +31,7 @@
 - **Backoff intervals are dynamically adjusted**: Each time the quantum is increased, the waiting period before a possible decrease is also increased (and vice versa), to avoid oscillation and to adapt to the system’s needs.
 - **Clients that disappear have their error state tracking removed**.
 - **All changes are logged**, with debug levels for detailed introspection.
+- **Actual driver quantum is reported at log level 1** when a running driver first appears or its quantum changes, with its name, ID, and observed buffer size in frames. These measurements come from complete `pw-top` snapshots before that frame's adjustments; follower latency requests and zero/unknown measurements are excluded. Minimum-quantum change messages describe the requested floor, not the actual buffer size.
 - The tuner tracks its **requested minimum separately from the observed driver quantum**. Lowering the minimum does not guarantee the actual quantum will decrease if a device or application needs a larger buffer.
 
 ---

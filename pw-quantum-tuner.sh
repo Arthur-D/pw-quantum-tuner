@@ -96,6 +96,7 @@ fi
 last_set_quantum=$quantum
 
 declare -A prev_errs curr_errs client_pretty_names client_quants client_roles
+declare -A reported_driver_quants
 declare -A quantum_backoff
 default_backoff=1
 
@@ -103,7 +104,7 @@ last_stability_event_time=$(date +%s)
 last_increase_time=0
 
 if (( log_level >= 1 )); then
-    echo "Starting PipeWire quantum tuner at log level $log_level (quant=$quantum, min=$min_quantum, max=$max_quantum)"
+    echo "Starting PipeWire quantum tuner at log level $log_level (minimum target=$quantum, min=$min_quantum, max=$max_quantum)"
 fi
 
 declare -A pwtop_col_idx
@@ -226,6 +227,26 @@ process_frame() {
     local bluetooth_active=0
     local bluetooth_below_floor=0
 
+    if (( full_frame )); then
+        for key in "${!curr_errs[@]}"; do
+            local driver_name=${client_pretty_names[$key]}
+            local driver_quantum=${client_quants[$key]:-0}
+            [[ "$driver_name" == [+=]* ]] && continue
+            (( driver_quantum > 0 )) || continue
+            if [[ "${reported_driver_quants[$key]:-}" != "$driver_quantum" ]]; then
+                log 1 "Observed driver quantum: $driver_name (ID:$key) = $driver_quantum frames (minimum target=$quantum, forced=$forced_quantum; sampled before this frame's adjustments)"
+                reported_driver_quants[$key]=$driver_quantum
+            fi
+        done
+        for key in "${!reported_driver_quants[@]}"; do
+            if [[ -z "${curr_errs[$key]+set}" ||
+                  "${client_pretty_names[$key]}" == [+=]* ]] ||
+                (( ${client_quants[$key]:-0} == 0 )); then
+                unset 'reported_driver_quants[$key]'
+            fi
+        done
+    fi
+
     # pw-top prefixes followers with '+' (or '=' for async nodes). Only a driver's QUANT is an
     # observed graph quantum; a follower's QUANT can be a latency request.
     for key in "${!curr_errs[@]}"; do
@@ -333,7 +354,7 @@ process_frame() {
             if set_quantum "$next_quantum" "$(( forced_quantum > 0 ))"; then
                 log 3 "pw-metadata command succeeded"
                 quantum_backoff[$next_quantum]=$next_backoff
-                msg="↑ Increasing quantum from $quantum to $next_quantum due to $total_delta new ERRs (next decrease in ${next_backoff} min)"
+                msg="↑ Increasing minimum quantum from $quantum to $next_quantum due to $total_delta new ERRs (next decrease in ${next_backoff} min)"
                 log 1 "$msg"
                 if (( log_level >= 2 )); then
                     for line in "${deltas[@]}"; do log 2 "$line"; done
@@ -375,7 +396,7 @@ process_frame() {
             fi
             if (( quantum_change_succeeded )); then
                 quantum_backoff[$next_quantum]=$next_backoff
-                log 1 "↓ Decreasing quantum from $quantum to $next_quantum (next decrease in ${next_backoff} min)"
+                log 1 "↓ Decreasing minimum quantum from $quantum to $next_quantum (next decrease in ${next_backoff} min)"
                 last_set_quantum=$next_quantum
                 quantum=$next_quantum
                 last_stability_event_time=$now

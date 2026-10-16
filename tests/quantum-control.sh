@@ -27,6 +27,7 @@ reset_state() {
     client_quants=()
     client_roles=()
     quantum_backoff=()
+    reported_driver_quants=()
     clients_with_new_errs=()
     fail_property=""
 }
@@ -187,12 +188,50 @@ failed_startup() {
     fi
 }
 
+driver_quantum_logging() {
+    local -a captured=()
+    log() { captured+=("$*"); }
+    client bluez_output.test 256 0
+    process_frame 0
+    expect "${#reported_driver_quants[@]}" 0 "partial snapshots are not reported" || return
+    process_frame 1
+    expect "${reported_driver_quants[1]}" 256 "initial driver observation is recorded" || return
+    [[ "${captured[*]}" == *"Observed driver quantum: bluez_output.test (ID:1) = 256 frames (minimum target=128, forced=0;"* ]] || return 1
+    captured=()
+    process_frame 1
+    [[ "${captured[*]}" != *"Observed driver quantum:"* ]] || return 1
+    client bluez_output.test 512 0
+    process_frame 1
+    expect "${reported_driver_quants[1]}" 512 "changed observation is recorded" || return
+    [[ "${captured[*]}" == *"= 512 frames"* ]] || return 1
+    captured=()
+    client '+ Firefox' 3600 0
+    process_frame 1
+    expect "${#reported_driver_quants[@]}" 0 "follower measurements excluded" || return
+    [[ "${captured[*]}" != *"Observed driver quantum:"* ]] || return 1
+    client '= bluez_output.test' 256 0
+    process_frame 1
+    expect "${#reported_driver_quants[@]}" 0 "async follower excluded" || return
+    client bluez_output.test 0 0
+    process_frame 1
+    expect "${#reported_driver_quants[@]}" 0 "zero measurement excluded" || return
+    client bluez_output.test 256 0
+    process_frame 1
+    curr_errs=()
+    process_frame 1
+    expect "${#reported_driver_quants[@]}" 0 "disappeared drivers cleared" || return
+    captured=()
+    client bluez_output.test 256 0
+    process_frame 1
+    [[ "${captured[*]}" == *"Observed driver quantum:"* ]]
+}
+
 failures=0
 for test in wired_floor bluetooth_escalation bluetooth_cooldown \
     bluetooth_respects_floor bluetooth_follower bluetooth_async_follower \
     new_bluetooth_client bluetooth_without_errors parse_driver_quantum \
     release_on_disconnect release_on_stability fallback_at_maximum \
-    write_failures failed_startup; do
+    write_failures failed_startup driver_quantum_logging; do
     if ( reset_state; "$test" ); then
         printf 'PASS: %s\n' "$test"
     else

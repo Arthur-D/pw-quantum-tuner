@@ -66,18 +66,33 @@ max_quantum=$(get_pipewire_conf_value "default.clock.max-quantum")
 # Ensure there is always headroom above min_quantum to allow quantum increases.
 (( max_quantum <= min_quantum )) && max_quantum=$(( min_quantum * 8 ))
 
-# Always start at min_quantum and clear any stale forced-quantum from previous runs.
-# Resuming from a stale clock.force-quantum value is dangerous: if a previous run left
-# quantum at the maximum, the tuner starts with no room to increase and cannot react to
-# new errors.  Starting fresh at min_quantum is safe because the error-detection loop
-# will ramp up quickly if the system needs a higher quantum.
+# quantum tracks the requested floor, not the graph's observed quantum.
 quantum=$min_quantum
-/usr/bin/pw-metadata -n settings 0 clock.force-quantum 0 >/dev/null 2>&1 || true
-# Write the config-derived min_quantum back to metadata so that the PipeWire graph
-# uses this value as a floor.  This also overwrites any stale value written by older
-# versions of this script that used clock.min-quantum (instead of clock.force-quantum)
-# to increase quantum.
-/usr/bin/pw-metadata -n settings 0 clock.min-quantum "$min_quantum" >/dev/null 2>&1 || true
+forced_quantum=0
+
+set_quantum() {
+    local target=$1
+    local force=${2:-0}
+    local forced_target=0
+    (( force && target > min_quantum )) && forced_target=$target
+
+    # Establish the floor before releasing an override.
+    log 3 "Executing: pw-metadata -n settings 0 clock.min-quantum $target"
+    if ! pw-metadata -n settings 0 clock.min-quantum "$target" >/dev/null 2>&1; then
+        log 1 "ERROR: pw-metadata clock.min-quantum $target command failed!"
+        return 1
+    fi
+    log 3 "Executing: pw-metadata -n settings 0 clock.force-quantum $forced_target"
+    if ! pw-metadata -n settings 0 clock.force-quantum "$forced_target" >/dev/null 2>&1; then
+        log 1 "ERROR: pw-metadata clock.force-quantum $forced_target command failed!"
+        return 1
+    fi
+    forced_quantum=$forced_target
+}
+
+if ! set_quantum "$quantum"; then
+    exit 1
+fi
 last_set_quantum=$quantum
 
 declare -A prev_errs curr_errs client_pretty_names client_quants client_roles
@@ -176,11 +191,11 @@ parse_client() {
         log 3 "Skipping client line - empty required fields (id:'$id', quant:'$quant', err:'$err')"
         return 1
     }
-    # Validate that id and err are non-negative integers before any arithmetic use.
+    # Validate arithmetic fields before use.
     # Non-integer values (e.g. decimals from a mis-mapped WAIT/BUSY column, or
     # unexpected pw-top output) would cause an arithmetic syntax error later.
-    if [[ ! "$id" =~ ^[0-9]+$ || ! "$err" =~ ^[0-9]+$ ]]; then
-        log 3 "Skipping client line - non-integer fields (id:'$id', err:'$err')"
+    if [[ ! "$id" =~ ^[0-9]+$ || ! "$err" =~ ^[0-9]+$ || ! "$quant" =~ ^[0-9]+$ ]]; then
+        log 3 "Skipping client line - non-integer fields (id:'$id', err:'$err', quant:'$quant')"
         return 1
     fi
     key="$id"
@@ -208,6 +223,29 @@ process_frame() {
     local full_frame=${1:-0}
     local quantum_increased=0
     local increased_clients=()
+    local bluetooth_active=0
+    local bluetooth_below_floor=0
+
+    # pw-top prefixes followers with '+' (or '=' for async nodes). Only a driver's QUANT is an
+    # observed graph quantum; a follower's QUANT can be a latency request.
+    for key in "${!curr_errs[@]}"; do
+        local client_name=${client_pretty_names[$key]}
+        if [[ "$client_name" =~ ^([+=][[:space:]]*)?bluez_(input|output)\. ]]; then
+            bluetooth_active=1
+            if [[ "$client_name" == bluez_* ]] &&
+                (( ${client_quants[$key]:-0} > 0 &&
+                   ${client_quants[$key]:-0} < quantum &&
+                   ${curr_errs[$key]} > ${prev_errs[$key]:-${curr_errs[$key]}} )); then
+                bluetooth_below_floor=1
+            fi
+        fi
+    done
+    # Absence is meaningful only after a complete snapshot.
+    if (( full_frame && forced_quantum > 0 && ! bluetooth_active )); then
+        if set_quantum "$quantum"; then
+            log 1 "Releasing forced quantum: no active Bluetooth audio (minimum remains $quantum)"
+        fi
+    fi
 
     # Initialize prev_errs for new clients to current value to avoid reporting pre-existing errors
     for key in "${!curr_errs[@]}"; do
@@ -266,7 +304,12 @@ process_frame() {
     if (( ${#clients_with_new_errs[@]} > 0 )) && (( seconds_since_increase >= min_increase_cooldown )); then
         next_quantum=$((quantum * 2))
         next_quantum=$(clamp "$next_quantum" "$min_quantum" "$max_quantum")
-        if (( next_quantum > quantum )); then
+        if (( bluetooth_below_floor && forced_quantum == 0 && quantum > min_quantum )); then
+            if set_quantum "$quantum" 1; then
+                log 1 "Forcing quantum to $quantum: Bluetooth driver remains below the requested minimum with new ERRs"
+                last_increase_time=$now
+            fi
+        elif (( next_quantum > quantum )); then
             if [[ -z "${quantum_backoff[$quantum]+set}" ]]; then
                 quantum_backoff[$quantum]=$default_backoff
             fi
@@ -287,8 +330,7 @@ process_frame() {
             for key in "${increased_clients[@]}"; do
                 total_delta=$((total_delta + curr_errs[$key] - prev_errs[$key]))
             done
-            log 3 "Executing: pw-metadata -n settings 0 clock.force-quantum $next_quantum"
-            if /usr/bin/pw-metadata -n settings 0 clock.force-quantum "$next_quantum" >/dev/null 2>&1; then
+            if set_quantum "$next_quantum" "$(( forced_quantum > 0 ))"; then
                 log 3 "pw-metadata command succeeded"
                 quantum_backoff[$next_quantum]=$next_backoff
                 msg="↑ Increasing quantum from $quantum to $next_quantum due to $total_delta new ERRs (next decrease in ${next_backoff} min)"
@@ -326,27 +368,10 @@ process_frame() {
                 next_backoff=$(( quantum_backoff[$next_quantum] / 2 ))
             fi
             (( next_backoff < 1 )) && next_backoff=1
-            log 3 "Executing: pw-metadata -n settings 0 clock.force-quantum $next_quantum"
             quantum_change_succeeded=0
-            if (( next_quantum <= min_quantum )); then
-                # Back at minimum: release the forced quantum so every device can
-                # revert to its natural quantum, then re-assert the min-quantum floor.
-                if /usr/bin/pw-metadata -n settings 0 clock.force-quantum 0 >/dev/null 2>&1; then
-                    log 3 "pw-metadata clock.force-quantum released (back at minimum)"
-                    quantum_change_succeeded=1
-                else
-                    log 1 "ERROR: pw-metadata clock.force-quantum 0 command failed!"
-                fi
-                if ! /usr/bin/pw-metadata -n settings 0 clock.min-quantum "$min_quantum" >/dev/null 2>&1; then
-                    log 1 "ERROR: pw-metadata clock.min-quantum command failed!"
-                fi
-            else
-                if /usr/bin/pw-metadata -n settings 0 clock.force-quantum "$next_quantum" >/dev/null 2>&1; then
-                    log 3 "pw-metadata command succeeded"
-                    quantum_change_succeeded=1
-                else
-                    log 1 "ERROR: pw-metadata command failed!"
-                fi
+            if set_quantum "$next_quantum"; then
+                log 3 "pw-metadata command succeeded (minimum adjusted, forced quantum released)"
+                quantum_change_succeeded=1
             fi
             if (( quantum_change_succeeded )); then
                 quantum_backoff[$next_quantum]=$next_backoff
@@ -412,7 +437,7 @@ while read -r line; do
     
     # Header detection - look for actual pw-top headers
     if [[ "$line" =~ ^[[:space:]]*S[[:space:]]+ID[[:space:]]+(QUANT|QUANTUM)[[:space:]]+.*ERR ]] || [[ "$line" =~ ^[[:space:]]*[A-Z][[:space:]]+ID[[:space:]]+(QUANT|QUANTUM)[[:space:]]+.*ERR ]]; then
-        if (( frame_started && ${#curr_errs[@]} > 0 )); then
+        if (( frame_started )); then
             log 3 "Processing frame with ${#curr_errs[@]} clients (header detected)"
             process_frame 1
         fi

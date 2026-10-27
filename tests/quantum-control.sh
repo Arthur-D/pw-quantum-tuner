@@ -170,6 +170,15 @@ write_failures() {
     expect "$quantum:$forced_quantum:$last_increase_time" "128:0:0" "failed floor is not committed" || return
     expect "${metadata_calls[*]}" "clock.min-quantum=256" "do not force after floor failure" || return
     reset_state
+    fail_property=clock.force-quantum
+    prev_errs[1]=0
+    client alsa_output.test 128 1
+    process_frame 1
+    expect "$quantum:$forced_quantum:$last_increase_time" "128:0:0" "failed force write does not commit the increase" || return
+    expect "${metadata_calls[*]}" \
+        "clock.min-quantum=256 clock.force-quantum=0 clock.min-quantum=128" \
+        "failed force write rolls the floor back" || return
+    reset_state
     force_bluetooth || return
     fail_property=clock.force-quantum
     test_now=$((test_now + 120))

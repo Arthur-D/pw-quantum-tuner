@@ -85,6 +85,10 @@ set_quantum() {
     log 3 "Executing: pw-metadata -n settings 0 clock.force-quantum $forced_target"
     if ! pw-metadata -n settings 0 clock.force-quantum "$forced_target" >/dev/null 2>&1; then
         log 1 "ERROR: pw-metadata clock.force-quantum $forced_target command failed!"
+        log 3 "Executing: pw-metadata -n settings 0 clock.min-quantum $quantum (rollback)"
+        if ! pw-metadata -n settings 0 clock.min-quantum "$quantum" >/dev/null 2>&1; then
+            log 1 "ERROR: failed to roll back clock.min-quantum to $quantum after force-quantum write failure!"
+        fi
         return 1
     fi
     forced_quantum=$forced_target
